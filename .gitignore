@@ -32,3 +32,11 @@ build/
 ._*
 .Spotlight-V100
 .Trashes
+
+# --- ZTNA stack additions ---
+.env
+.env.local
+traefik/certs/*.crt
+traefik/certs/*.key
+traefik/certs/acme.json
+!traefik/certs/.gitkeep
