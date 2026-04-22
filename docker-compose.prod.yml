@@ -1,0 +1,27 @@
+# Production overlay:
+# - enables Let's Encrypt HTTP-01 ACME via Traefik CLI args (no static-config edit)
+# - wires the api router to the `letsencrypt` resolver
+# - persists ACME state to the `traefik-certs` named volume
+#
+# Requires in .env:
+#   ACME_EMAIL=ops@yourdomain.example
+#
+# Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+volumes:
+  traefik-certs:
+
+services:
+  traefik:
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+      - --certificatesResolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesResolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesResolvers.letsencrypt.acme.httpChallenge.entryPoint=web
+    volumes:
+      - traefik-certs:/letsencrypt
+
+  api:
+    labels:
+      - traefik.http.routers.api.tls.certresolver=letsencrypt
