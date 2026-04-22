@@ -1,0 +1,374 @@
+name: Validate Docker Compose
+
+on:
+  pull_request:
+    paths:
+      - "**/docker-compose*.yml"
+      - "**/docker-compose*.yaml"
+      - "**/.env*"
+
+jobs:
+  # ─────────────────────────────────────────────
+  # JOB 1: Lint – blocks merge on failure
+  # ─────────────────────────────────────────────
+  lint:
+    name: Lint Docker Compose
+    runs-on: ubuntu-latest
+    outputs:
+      compose-file: ${{ steps.detect.outputs.compose-file }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Detect compose file
+        id: detect
+        run: |
+          for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+            if [ -f "$f" ]; then
+              echo "compose-file=$f" >> $GITHUB_OUTPUT
+              echo "Found compose file: $f"
+              exit 0
+            fi
+          done
+          echo "::error::No docker-compose file found in repository root."
+          exit 1
+
+      - name: Validate compose syntax
+        run: |
+          docker compose -f ${{ steps.detect.outputs.compose-file }} config --quiet
+          echo "✅ Docker Compose syntax is valid."
+
+      - name: Install and run yamllint
+        run: |
+          pip install yamllint --quiet
+          yamllint -d "{extends: relaxed, rules: {line-length: {max: 120}}}" \
+            ${{ steps.detect.outputs.compose-file }}
+          echo "✅ YAML lint passed."
+
+      - name: Check for common issues
+        run: |
+          FILE="${{ steps.detect.outputs.compose-file }}"
+          python3 - <<'EOF'
+          import yaml, sys
+
+          with open("${{ steps.detect.outputs.compose-file }}") as f:
+              compose = yaml.safe_load(f)
+
+          services = compose.get("services", {})
+          missing_restart = [s for s, cfg in services.items() if "restart" not in (cfg or {})]
+          if missing_restart:
+              print(f"::warning::Services missing restart policy: {', '.join(missing_restart)}")
+
+          risky_ports = []
+          for svc, cfg in services.items():
+              for port in (cfg or {}).get("ports", []):
+                  port_str = str(port)
+                  if ":" not in port_str or port_str.startswith("0.0.0.0"):
+                      risky_ports.append(f"{svc}:{port_str}")
+          if risky_ports:
+              print(f"::warning::Services with unbound port exposure: {', '.join(risky_ports)}")
+          EOF
+
+      - name: Notify Teams – Lint Failed
+        if: failure()
+        run: |
+          PAYLOAD=$(cat <<EOF
+          {
+            "type": "message",
+            "attachments": [{
+              "contentType": "application/vnd.microsoft.card.adaptive",
+              "contentUrl": null,
+              "content": {
+                "\$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.2",
+                "body": [
+                  {
+                    "type": "Container",
+                    "style": "attention",
+                    "items": [{
+                      "type": "TextBlock",
+                      "text": "❌ Docker Compose Lint Failed — Merge Blocked",
+                      "weight": "Bolder",
+                      "size": "Medium",
+                      "color": "Attention"
+                    }]
+                  },
+                  {
+                    "type": "FactSet",
+                    "facts": [
+                      { "title": "Repository", "value": "${{ github.repository }}" },
+                      { "title": "PR",         "value": "#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}" },
+                      { "title": "Author",     "value": "${{ github.event.pull_request.user.login }}" },
+                      { "title": "Branch",     "value": "${{ github.event.pull_request.head.ref }} → ${{ github.event.pull_request.base.ref }}" }
+                    ]
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "The docker-compose file failed linting. Fix syntax errors before merging.",
+                    "wrap": true,
+                    "color": "Attention"
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View Workflow Run",
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  },
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View Pull Request",
+                    "url": "${{ github.event.pull_request.html_url }}"
+                  }
+                ]
+              }
+            }]
+          }
+          EOF
+          )
+          curl -s -X POST -H 'Content-Type: application/json' \
+            -d "$PAYLOAD" "${{ secrets.MS_TEAMS_WEBHOOK_URI }}"
+
+  # ─────────────────────────────────────────────
+  # JOB 2: Smoke test – blocks merge on failure
+  # ─────────────────────────────────────────────
+  smoke-test:
+    name: Smoke Test Docker Compose
+    runs-on: ubuntu-latest
+    needs: lint
+    outputs:
+      critical-log-errors: ${{ steps.check-logs.outputs.critical-errors }}
+      log-error-details: ${{ steps.check-logs.outputs.error-details }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start services
+        run: |
+          docker compose -f ${{ needs.lint.outputs.compose-file }} up -d
+
+      - name: Wait 30 seconds for services to stabilise
+        run: sleep 30
+
+      - name: Check for restarts or crashed containers
+        id: health-check
+        run: |
+          COMPOSE_FILE="${{ needs.lint.outputs.compose-file }}"
+          FAILED=false
+
+          for container in $(docker compose -f "$COMPOSE_FILE" ps -q); do
+            NAME=$(docker inspect --format '{{.Name}}' "$container" | tr -d '/')
+            RESTARTS=$(docker inspect --format '{{.RestartCount}}' "$container")
+            STATE=$(docker inspect --format '{{.State.Status}}' "$container")
+
+            if [[ "$STATE" != "running" ]]; then
+              echo "::error::Container $NAME is not running (state: $STATE)"
+              FAILED=true
+            fi
+            if [[ "$RESTARTS" -gt 0 ]]; then
+              echo "::error::Container $NAME restarted ${RESTARTS} time(s)"
+              FAILED=true
+            fi
+          done
+
+          if [ "$FAILED" = true ]; then
+            echo "::error::One or more services failed or restarted. Blocking merge."
+            docker compose -f "$COMPOSE_FILE" logs --tail=50
+            exit 1
+          fi
+
+          echo "✅ All containers healthy with no restarts."
+
+      - name: Collect and analyse logs
+        id: check-logs
+        if: success()
+        run: |
+          COMPOSE_FILE="${{ needs.lint.outputs.compose-file }}"
+          LOG_OUTPUT=$(docker compose -f "$COMPOSE_FILE" logs --no-color 2>&1)
+          CRITICAL_PATTERNS="CRITICAL|FATAL|OOM|segfault|panic|killed"
+          CRITICAL_HITS=$(echo "$LOG_OUTPUT" | grep -iE "$CRITICAL_PATTERNS" || true)
+
+          if [ -n "$CRITICAL_HITS" ]; then
+            echo "critical-errors=true" >> $GITHUB_OUTPUT
+            ENCODED=$(echo "$CRITICAL_HITS" | head -50 | base64 -w 0)
+            echo "error-details=$ENCODED" >> $GITHUB_OUTPUT
+            echo "::warning::Critical log entries found. Merge is allowed but review required."
+          else
+            echo "critical-errors=false" >> $GITHUB_OUTPUT
+            echo "error-details="        >> $GITHUB_OUTPUT
+            echo "✅ No critical errors found in logs."
+          fi
+
+      - name: Tear down services
+        if: always()
+        run: |
+          docker compose -f ${{ needs.lint.outputs.compose-file }} down --volumes --remove-orphans
+
+      - name: Notify Teams – Smoke Test Failed
+        if: failure()
+        run: |
+          PAYLOAD=$(cat <<EOF
+          {
+            "type": "message",
+            "attachments": [{
+              "contentType": "application/vnd.microsoft.card.adaptive",
+              "contentUrl": null,
+              "content": {
+                "\$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.2",
+                "body": [
+                  {
+                    "type": "Container",
+                    "style": "attention",
+                    "items": [{
+                      "type": "TextBlock",
+                      "text": "💥 Docker Compose Smoke Test Failed — Merge Blocked",
+                      "weight": "Bolder",
+                      "size": "Medium",
+                      "color": "Attention"
+                    }]
+                  },
+                  {
+                    "type": "FactSet",
+                    "facts": [
+                      { "title": "Repository", "value": "${{ github.repository }}" },
+                      { "title": "PR",         "value": "#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}" },
+                      { "title": "Author",     "value": "${{ github.event.pull_request.user.login }}" },
+                      { "title": "Branch",     "value": "${{ github.event.pull_request.head.ref }} → ${{ github.event.pull_request.base.ref }}" }
+                    ]
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "One or more containers failed to start or restarted within 30 seconds. Check logs in the workflow run.",
+                    "wrap": true,
+                    "color": "Attention"
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View Workflow Run",
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  },
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View Pull Request",
+                    "url": "${{ github.event.pull_request.html_url }}"
+                  }
+                ]
+              }
+            }]
+          }
+          EOF
+          )
+          curl -s -X POST -H 'Content-Type: application/json' \
+            -d "$PAYLOAD" "${{ secrets.MS_TEAMS_WEBHOOK_URI }}"
+
+  # ─────────────────────────────────────────────
+  # JOB 3: Comment on PR + notify Teams on critical log errors
+  # ─────────────────────────────────────────────
+  report-log-errors:
+    name: Report Critical Log Errors
+    runs-on: ubuntu-latest
+    needs: smoke-test
+    if: needs.smoke-test.outputs.critical-log-errors == 'true'
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Decode log errors
+        id: decode
+        run: |
+          DECODED=$(echo "${{ needs.smoke-test.outputs.log-error-details }}" | base64 -d)
+          echo "errors<<EOF" >> $GITHUB_OUTPUT
+          echo "$DECODED"    >> $GITHUB_OUTPUT
+          echo "EOF"         >> $GITHUB_OUTPUT
+
+      - name: Post warning comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const errors = `${{ steps.decode.outputs.errors }}`;
+            const body = [
+              "## ⚠️ Docker Compose — Critical Log Entries Detected",
+              "",
+              "Containers started successfully, **but critical log entries were found**.",
+              "Merge is **allowed**, but please review the errors below before proceeding.",
+              "",
+              "### Matched patterns: `CRITICAL | FATAL | OOM | segfault | panic | killed`",
+              "```",
+              errors,
+              "```",
+              "",
+              `> Detected during workflow run [#${context.runNumber}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+
+      - name: Notify Teams – Critical Log Errors (Warning)
+        run: |
+          ERRORS_PREVIEW=$(echo "${{ needs.smoke-test.outputs.log-error-details }}" | base64 -d | head -5)
+          PAYLOAD=$(cat <<EOF
+          {
+            "type": "message",
+            "attachments": [{
+              "contentType": "application/vnd.microsoft.card.adaptive",
+              "contentUrl": null,
+              "content": {
+                "\$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.2",
+                "body": [
+                  {
+                    "type": "Container",
+                    "style": "warning",
+                    "items": [{
+                      "type": "TextBlock",
+                      "text": "⚠️ Docker Compose — Critical Log Entries (Merge Allowed)",
+                      "weight": "Bolder",
+                      "size": "Medium",
+                      "color": "Warning"
+                    }]
+                  },
+                  {
+                    "type": "FactSet",
+                    "facts": [
+                      { "title": "Repository", "value": "${{ github.repository }}" },
+                      { "title": "PR",         "value": "#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}" },
+                      { "title": "Author",     "value": "${{ github.event.pull_request.user.login }}" }
+                    ]
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "Containers started OK but logs contained CRITICAL/FATAL/OOM/segfault/panic/killed entries. A comment has been added to the PR. Please review before merging.",
+                    "wrap": true
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View PR Comment",
+                    "url": "${{ github.event.pull_request.html_url }}"
+                  },
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View Workflow Run",
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+                ]
+              }
+            }]
+          }
+          EOF
+          )
+          curl -s -X POST -H 'Content-Type: application/json' \
+            -d "$PAYLOAD" "${{ secrets.MS_TEAMS_WEBHOOK_URI }}"

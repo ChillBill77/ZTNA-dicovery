@@ -1,0 +1,34 @@
+# ==========================
+# Project-specific exclusions
+# ==========================
+ts/*
+/data/*_data
+/logs/*
+/outputs/*
+/venv/*
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.DS_Store
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+#
+# MacOS Specific
+#
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes

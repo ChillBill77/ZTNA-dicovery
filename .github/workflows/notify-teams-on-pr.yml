@@ -1,0 +1,137 @@
+name: Notify Teams on Pull Request Activity
+
+on:
+  pull_request:
+    types: [opened, closed, reopened, review_requested]
+
+jobs:
+  notify-teams:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve event metadata
+        id: meta
+        run: |
+          EVENT="${{ github.event.action }}"
+          MERGED="${{ github.event.pull_request.merged }}"
+
+          if [[ "$EVENT" == "opened" ]]; then
+            echo "title=🔀 Pull Request Opened"        >> $GITHUB_OUTPUT
+            echo "color=Accent"                         >> $GITHUB_OUTPUT
+            echo "status=Opened"                        >> $GITHUB_OUTPUT
+          elif [[ "$EVENT" == "closed" && "$MERGED" == "true" ]]; then
+            echo "title=✅ Pull Request Merged"         >> $GITHUB_OUTPUT
+            echo "color=Good"                           >> $GITHUB_OUTPUT
+            echo "status=Merged"                        >> $GITHUB_OUTPUT
+          elif [[ "$EVENT" == "closed" && "$MERGED" == "false" ]]; then
+            echo "title=❌ Pull Request Closed"         >> $GITHUB_OUTPUT
+            echo "color=Attention"                      >> $GITHUB_OUTPUT
+            echo "status=Closed without merge"          >> $GITHUB_OUTPUT
+          elif [[ "$EVENT" == "reopened" ]]; then
+            echo "title=🔁 Pull Request Reopened"       >> $GITHUB_OUTPUT
+            echo "color=Warning"                        >> $GITHUB_OUTPUT
+            echo "status=Reopened"                      >> $GITHUB_OUTPUT
+          elif [[ "$EVENT" == "review_requested" ]]; then
+            echo "title=👀 Review Requested"            >> $GITHUB_OUTPUT
+            echo "color=Accent"                         >> $GITHUB_OUTPUT
+            echo "status=Review Requested"              >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Adaptive Card to Teams
+        run: |
+          PAYLOAD=$(cat <<EOF
+          {
+            "type": "message",
+            "attachments": [{
+              "contentType": "application/vnd.microsoft.card.adaptive",
+              "contentUrl": null,
+              "content": {
+                "\$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.2",
+                "body": [
+                  {
+                    "type": "Container",
+                    "style": "emphasis",
+                    "items": [
+                      {
+                        "type": "ColumnSet",
+                        "columns": [
+                          {
+                            "type": "Column",
+                            "width": "auto",
+                            "items": [{
+                              "type": "Image",
+                              "url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                              "size": "Small",
+                              "style": "Person"
+                            }]
+                          },
+                          {
+                            "type": "Column",
+                            "width": "stretch",
+                            "items": [
+                              {
+                                "type": "TextBlock",
+                                "text": "${{ steps.meta.outputs.title }}",
+                                "weight": "Bolder",
+                                "size": "Medium",
+                                "color": "${{ steps.meta.outputs.color }}"
+                              },
+                              {
+                                "type": "TextBlock",
+                                "text": "${{ github.repository }}",
+                                "isSubtle": true,
+                                "spacing": "None"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}",
+                    "weight": "Bolder",
+                    "size": "Medium",
+                    "wrap": true,
+                    "spacing": "Medium"
+                  },
+                  {
+                    "type": "FactSet",
+                    "facts": [
+                      { "title": "Status",    "value": "${{ steps.meta.outputs.status }}" },
+                      { "title": "Author",    "value": "${{ github.event.pull_request.user.login }}" },
+                      { "title": "Branch",    "value": "${{ github.event.pull_request.head.ref }} → ${{ github.event.pull_request.base.ref }}" },
+                      { "title": "Reviewer",  "value": "${{ github.event.requested_reviewer.login || 'N/A' }}" }
+                    ]
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View Pull Request",
+                    "url": "${{ github.event.pull_request.html_url }}"
+                  }
+                ]
+              }
+            }]
+          }
+          EOF
+          )
+
+          HTTP_STATUS=$(curl -s -o /tmp/teams_response.txt -w "%{http_code}" \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            -d "$PAYLOAD" \
+            "${{ secrets.MS_TEAMS_WEBHOOK_URI }}")
+
+          echo "Webhook response code: $HTTP_STATUS"
+          cat /tmp/teams_response.txt
+
+          if [[ "$HTTP_STATUS" =~ ^2 ]]; then
+            echo "✅ Teams notification sent successfully."
+          else
+            echo "❌ Teams webhook returned HTTP $HTTP_STATUS."
+            exit 1
+          fi

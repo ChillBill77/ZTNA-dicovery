@@ -1,0 +1,108 @@
+name: Notify Teams on New Issue
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  notify-teams:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Adaptive Card to Teams
+        run: |
+          PAYLOAD=$(cat <<EOF
+          {
+            "type": "message",
+            "attachments": [{
+              "contentType": "application/vnd.microsoft.card.adaptive",
+              "contentUrl": null,
+              "content": {
+                "\$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.2",
+                "body": [
+                  {
+                    "type": "Container",
+                    "style": "emphasis",
+                    "items": [
+                      {
+                        "type": "ColumnSet",
+                        "columns": [
+                          {
+                            "type": "Column",
+                            "width": "auto",
+                            "items": [{
+                              "type": "Image",
+                              "url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                              "size": "Small",
+                              "style": "Person"
+                            }]
+                          },
+                          {
+                            "type": "Column",
+                            "width": "stretch",
+                            "items": [
+                              {
+                                "type": "TextBlock",
+                                "text": "🐛 New Issue Opened",
+                                "weight": "Bolder",
+                                "size": "Medium",
+                                "color": "Accent"
+                              },
+                              {
+                                "type": "TextBlock",
+                                "text": "${{ github.repository }}",
+                                "isSubtle": true,
+                                "spacing": "None"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "#${{ github.event.issue.number }}: ${{ github.event.issue.title }}",
+                    "weight": "Bolder",
+                    "size": "Medium",
+                    "wrap": true,
+                    "spacing": "Medium"
+                  },
+                  {
+                    "type": "FactSet",
+                    "facts": [
+                      { "title": "Opened by", "value": "${{ github.event.issue.user.login }}" },
+                      { "title": "Repository", "value": "${{ github.repository }}" },
+                      { "title": "Labels", "value": "${{ join(github.event.issue.labels.*.name, ', ') || 'None' }}" }
+                    ]
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View Issue",
+                    "url": "${{ github.event.issue.html_url }}"
+                  }
+                ]
+              }
+            }]
+          }
+          EOF
+          )
+
+          HTTP_STATUS=$(curl -s -o /tmp/teams_response.txt -w "%{http_code}" \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            -d "$PAYLOAD" \
+            "${{ secrets.MS_TEAMS_WEBHOOK_URI }}")
+
+          echo "Webhook response code: $HTTP_STATUS"
+          cat /tmp/teams_response.txt
+
+          if [[ "$HTTP_STATUS" =~ ^2 ]]; then
+            echo "✅ Teams notification sent successfully."
+          else
+            echo "❌ Teams webhook returned HTTP $HTTP_STATUS."
+            exit 1
+          fi
