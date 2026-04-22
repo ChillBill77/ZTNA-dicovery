@@ -138,7 +138,7 @@ CREATE TABLE flows (
   bytes       BIGINT      NOT NULL,
   packets     BIGINT      NOT NULL,
   flow_count  INT         NOT NULL,
-  source      TEXT        NOT NULL
+  source      TEXT        NOT NULL    -- adapter name, e.g. 'palo_alto' | 'fortigate' (NOT firewall hostname)
 );
 SELECT create_hypertable('flows', 'time', chunk_time_interval => INTERVAL '1 hour');
 SELECT add_retention_policy('flows', INTERVAL '30 days');
@@ -327,7 +327,7 @@ class IdentityAdapter(ABC):
 | `palo_alto_adapter` | syslog UDP/TCP, CSV or LEEF | TRAFFIC logs; keep `log_subtype=end` only to avoid double-counting; App-ID → `app_id` field |
 | `fortigate_adapter` | syslog UDP/TCP, key=value | `type=traffic,subtype=forward,status=close`; `hostname`, `app` → `fqdn`/`app_id` |
 | `ad_4624_adapter` | syslog from WEF/Winlogbeat | Event 4624; filter logon types 2/3/10/11; parse `TargetUserName`, `IpAddress` |
-| `entra_signin_adapter` | Graph API `auditLogs/signIns`, 60s delta poll | client-credentials auth; `AuditLog.Read.All` scope; success only |
+| `entra_signin_adapter` | Graph API `auditLogs/signIns`, 60s delta poll | client-credentials auth; `AuditLog.Read.All`; success only; YAML config surface includes `tenant_id`, `client_id`, `client_secret` (env), `corp_cidrs: [CIDR, ...]` used by confidence rules |
 | `cisco_ise_adapter` | syslog LiveLogs | RADIUS Accounting Start/Stop; `User-Name`, `Framed-IP-Address` |
 | `aruba_clearpass_adapter` | syslog CEF | same pattern as ISE |
 
@@ -346,7 +346,7 @@ Redis identity  ─► IdentityIndex (interval tree)─┤
 Postgres apps ──► AppResolver cache ────────────┘
 ```
 
-Each stage connected by bounded `asyncio.Queue(maxsize=10000)`. Queue overflow drops oldest and increments `correlator_dropped_flows_total`.
+Each stage connected by bounded `asyncio.Queue(maxsize=10000)`. Queue overflow drops oldest and increments `correlator_dropped_flows_total`. **Each `SankeyDelta` carries a `lossy: bool` flag** set when any stage dropped flows during the window, plus a `dropped_count` hint; the UI freshness banner turns amber for lossy windows so users know totals are under-counted.
 
 ### 6.2 IdentityIndex
 
@@ -383,7 +383,11 @@ def lcd(users: set[str],
 - `single_user_floor` — default 500; prevents useless "Domain Users" collapse for lone-user strands.
 - `nested` — we use flattened (transitive) membership from the directory.
 
-**Unknown users** are excluded from the LCD computation and rendered as a separate "unknown" strand.
+**Fallback behavior** (in order):
+
+1. **Unknown users** — excluded from LCD computation, rendered as a separate `"unknown"` strand.
+2. **Known users with no shared non-excluded group** (LCD returns `None` for the group-set) — rendered as individual per-user strands in the left column, with label = `user_upn`.
+3. **Single-user above floor** — same as case 2: rendered as individual user strand.
 
 ### 6.4 Sankey delta message
 
@@ -431,6 +435,8 @@ GET  /api/flows/sankey?from=&to=&mode=live|historical
      &src_cidr=&dst_app=&proto=
        → SankeyDelta
 GET  /api/flows/raw?src_ip=&dst_ip=&port=&from=&to=&limit=&cursor=
+     # cursor is an opaque base64 token {last_time, last_src_ip, last_dst_ip, last_dst_port};
+     # response envelope: { "items": [...], "next_cursor": "..." | null, "total_est": N }
 GET  /api/identity/resolve?src_ip=&at=
      → { user_upn, source, confidence, groups[] }
 
@@ -491,7 +497,7 @@ Backed by Redis pub/sub channel `sankey.live`; filters applied server-side per c
 ### 8.3 Performance & accessibility
 
 - D3 diff-only redraws, 400 ms transitions; canvas fallback when links > 500.
-- Client caps top-200 links by bytes; sidebar prompts further filtering when truncated.
+- **Server-side top-N cap** — `/api/flows/sankey` and `/ws/sankey` accept `limit` (default 200, max 1000), rank by bytes desc, and return `{ "truncated": bool, "total_links": N }`. Client renders exactly what arrives; sidebar shows "showing 200 of N — refine filters" when truncated. Keeps visible-strand totals consistent (no client-side recompute).
 - Okabe-Ito colors; magnitude redundantly encoded via opacity.
 - Keyboard-navigable focus rings; contrast ≥ 4.5:1 (WCAG AA).
 
@@ -551,7 +557,7 @@ profiles:
 
 - **EntryPoints**
   - `websecure` — :443/tcp, TLS
-  - `pan-syslog` — :514/udp + :514/tcp (shared with FortiGate; distinguished by source-IP in adapter config, or split into :514 PAN / :515 FGT via two entrypoints if the operator prefers)
+  - `firewall-syslog` — :514/udp + :514/tcp. **Default:** PAN and FortiGate share :514; `flow-ingest` demuxes by source IP (configured per-firewall in adapter YAML). *Variant:* operators who prefer isolation can split into :514 PAN + :515 FGT by adding a second entrypoint and router — off by default to keep code and config paths single.
   - `ad-syslog` — :516/udp + :516/tcp
   - `ise-syslog` — :517/udp + :517/tcp
   - `clearpass-syslog` — :518/udp + :518/tcp
@@ -561,7 +567,7 @@ profiles:
   - `Host(<domain>)` → `web` service (SPA)
 - **TCP/UDP routers** — catch-all per entrypoint, forwarded to the corresponding ingest service on the backend network.
 - **Certificates** — default Let's Encrypt (HTTP-01 or DNS-01 via env-configured provider); fallback to mounted certs at `/etc/traefik/certs/` for offline/air-gapped installs.
-- **Dashboard** — Traefik dashboard exposed at `/traefik` behind the same OIDC auth as `api` (via `forwardAuth` middleware hitting `api`'s `/auth/verify` endpoint), admin role only.
+- **Dashboard** — Traefik dashboard exposed at `/traefik` behind the same OIDC auth as `api` (via `forwardAuth` middleware hitting `api`'s `/auth/verify` endpoint), admin role only. *Known dependency:* if `api` is down, the dashboard is locked out. Admin fallback path: `docker compose logs traefik` and direct socket inspection from the host. Documented in `docs/operations.md`.
 - **Middleware**
   - `rate-limit` — 60 rps per IP on REST paths.
   - `compression` — gzip/br for static assets.
@@ -666,7 +672,7 @@ ztna-discovery/
 
 - "20 k flows/s" interpreted as **per-second peak**. If meant as total-at-one-time, architecture comfortably over-provisioned.
 - Entra tenant is assumed to be the same used for user SSO and identity enrichment.
-- AD event 4624 forwarding (WEF or Winlogbeat) is set up by the operator; out of scope for this app.
+- AD event 4624 forwarding (WEF or Winlogbeat) is set up by the operator; out of scope for this app's runtime code, **but `docs/adapters.md` includes a WEF + Winlogbeat setup runbook** so the "≤ 15 min identity enrichment" success criterion is reachable by a first-time operator.
 - Group-membership refresh is nightly + on-demand; real-time membership changes can lag up to 24 h (covered by on-demand path for newly-seen users).
 - SaaS catalog seed list is intentionally small; expected to grow via UI edits and community contributions.
 
