@@ -1,0 +1,16 @@
+# Dev overrides:
+# - mounts source for api hot-reload
+# - exposes postgres/redis to host for direct inspection
+# TLS in dev: Traefik's default config has no cert resolver, so it serves its
+# built-in self-signed cert. Use `curl -k` / browser "accept risk".
+services:
+  postgres:
+    ports: ["5432:5432"]
+
+  redis:
+    ports: ["6379:6379"]
+
+  api:
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./api/src:/app/src
