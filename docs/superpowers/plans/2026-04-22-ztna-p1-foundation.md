@@ -116,6 +116,10 @@ ignore_missing_imports = False
 
 [mypy-tests.*]
 disallow_untyped_defs = False
+
+# Alembic ships no py.typed; env.py imports alembic.context / alembic.op
+[mypy-alembic.*]
+ignore_missing_imports = True
 ```
 
 - [ ] **Step 3: Write `pytest.ini`**
@@ -123,7 +127,7 @@ disallow_untyped_defs = False
 ```ini
 [pytest]
 addopts = -ra --strict-markers --strict-config
-testpaths = api/tests migrate/tests tests
+testpaths = api/tests tests
 asyncio_mode = auto
 ```
 
@@ -295,9 +299,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install tools
-        run: pip install ruff mypy pytest pytest-asyncio
-      - name: Install api deps
-        run: pip install -e api/
+        run: pip install ruff mypy
+      - name: Install api with test extras (pulls pytest + pytest-asyncio + httpx)
+        run: pip install -e 'api/[test]'
       - name: Install migrate deps
         run: pip install -r migrate/requirements.txt
       - name: Ruff lint
@@ -308,6 +312,25 @@ jobs:
         run: mypy api/src migrate/alembic
       - name: Pytest
         run: pytest
+
+  no-claude-attribution:
+    # Per project policy: commit messages on this repo must not contain Claude
+    # attribution trailers. Fail the job if any commit in the PR range does.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit messages for forbidden trailers
+        run: |
+          range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          if [ -z "${{ github.event.pull_request.base.sha }}" ]; then
+            range="HEAD~20..HEAD"   # push to main: inspect last 20
+          fi
+          if git log --format='%B' "$range" | grep -iE 'Co-Authored-By:.*Claude|Generated with.*Claude Code'; then
+            echo "::error::Forbidden Claude attribution found in commit messages."
+            exit 1
+          fi
 
   migration-roundtrip:
     runs-on: ubuntu-latest
@@ -443,8 +466,13 @@ if config.config_file_name:
 db_url = os.environ.get("DATABASE_URL")
 if not db_url:
     raise RuntimeError("DATABASE_URL env var is required")
-# Alembic's sync engine needs psycopg, not asyncpg
-db_url = db_url.replace("+asyncpg", "+psycopg")
+# Alembic's sync engine needs psycopg3. Normalize any dialect suffix so that
+# both the runtime URL (postgresql+asyncpg://...) and bare (postgresql://...)
+# land on psycopg3 for offline migration work.
+if "+asyncpg" in db_url:
+    db_url = db_url.replace("+asyncpg", "+psycopg")
+elif "+" not in db_url.split("://", 1)[0]:
+    db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = None  # we hand-write migrations for Timescale DDL
@@ -569,6 +597,9 @@ def upgrade() -> None:
     op.execute("SELECT add_retention_policy('flows', INTERVAL '30 days');")
     op.execute("CREATE INDEX ON flows (src_ip, time DESC);")
     op.execute("CREATE INDEX ON flows (dst_ip, dst_port, time DESC);")
+    op.execute(
+        "COMMENT ON COLUMN flows.source IS 'adapter name (e.g. palo_alto, fortigate) — NOT firewall hostname';"
+    )
     op.execute(
         """
         CREATE MATERIALIZED VIEW flows_1m
@@ -765,7 +796,8 @@ def upgrade() -> None:
           fqdn_pattern   TEXT   NOT NULL,
           category       TEXT,
           source         TEXT   NOT NULL DEFAULT 'manual',
-          priority       INT    NOT NULL DEFAULT 100
+          priority       INT    NOT NULL DEFAULT 100,
+          UNIQUE (fqdn_pattern)
         );
         """
     )
@@ -789,6 +821,7 @@ def upgrade() -> None:
           port   INT      NOT NULL,
           proto  SMALLINT NOT NULL,
           name   TEXT     NOT NULL,
+          source TEXT     NOT NULL DEFAULT 'manual',   -- 'seeded' | 'manual'
           PRIMARY KEY (port, proto)
         );
         """
@@ -992,20 +1025,25 @@ def upgrade() -> None:
             """
             INSERT INTO saas_catalog (name, vendor, fqdn_pattern, category, source, priority)
             VALUES (%(name)s, %(vendor)s, %(fqdn_pattern)s, %(category)s, %(source)s, %(priority)s)
+            ON CONFLICT (fqdn_pattern) DO NOTHING
             """,
             {**row, "priority": int(row["priority"])},
         )
 
     for row in _load_csv("port_defaults.csv"):
         conn.exec_driver_sql(
-            "INSERT INTO port_defaults (port, proto, name) VALUES (%(port)s, %(proto)s, %(name)s) ON CONFLICT DO NOTHING",
+            """
+            INSERT INTO port_defaults (port, proto, name, source)
+            VALUES (%(port)s, %(proto)s, %(name)s, 'seeded')
+            ON CONFLICT DO NOTHING
+            """,
             {**row, "port": int(row["port"]), "proto": int(row["proto"])},
         )
 
 
 def downgrade() -> None:
     op.execute("DELETE FROM saas_catalog WHERE source = 'seeded';")
-    op.execute("DELETE FROM port_defaults;")
+    op.execute("DELETE FROM port_defaults WHERE source = 'seeded';")
 ```
 
 - [ ] **Step 2: Commit**
@@ -1074,12 +1112,14 @@ git commit -m "chore(api): add pyproject.toml"
 Create `api/tests/__init__.py` (empty) and `api/tests/test_settings.py`:
 
 ```python
-import os
+from pathlib import Path
 
 from api.settings import Settings
 
 
-def test_settings_loads_from_env(monkeypatch) -> None:
+def test_settings_loads_from_env(monkeypatch, tmp_path: Path) -> None:
+    # Isolate from any repo-root .env that may exist locally.
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://x/y")
     monkeypatch.setenv("REDIS_URL", "redis://r:6379/0")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
@@ -1091,7 +1131,8 @@ def test_settings_loads_from_env(monkeypatch) -> None:
     assert s.log_level == "DEBUG"
 
 
-def test_settings_defaults_when_missing(monkeypatch) -> None:
+def test_settings_defaults_when_missing(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)        # no .env in cwd
     for var in ("DATABASE_URL", "REDIS_URL", "LOG_LEVEL"):
         monkeypatch.delenv(var, raising=False)
 
@@ -1381,9 +1422,14 @@ git commit -m "feat(api): add Dockerfile"
 - Create: `traefik/traefik.yml`
 - Create: `traefik/certs/.gitkeep` (empty)
 
-- [ ] **Step 1: Write `traefik/traefik.yml`**
+- [ ] **Step 1: Write `traefik/traefik.yml` (default — no ACME)**
 
 ```yaml
+# Default static config.
+# - Works out-of-the-box for dev (Traefik serves its built-in self-signed cert
+#   on websecure when no resolver is configured).
+# - Prod layers on an ACME resolver via docker-compose.prod.yml + Traefik CLI
+#   args; no edits to this file needed.
 log:
   level: INFO
 
@@ -1426,14 +1472,6 @@ providers:
   file:
     directory: /etc/traefik/dynamic
     watch: true
-
-certificatesResolvers:
-  letsencrypt:
-    acme:
-      email: "${ACME_EMAIL}"
-      storage: /certs/acme.json
-      httpChallenge:
-        entryPoint: web
 ```
 
 - [ ] **Step 2: Create placeholder**
@@ -1534,7 +1572,6 @@ networks:
 volumes:
   postgres-data:
   redis-data:
-  traefik-certs:
 
 services:
   postgres:
@@ -1596,7 +1633,8 @@ services:
       - traefik.http.routers.api.rule=Host(`${APP_DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/health`))
       - traefik.http.routers.api.entrypoints=websecure
       - traefik.http.routers.api.tls=true
-      - traefik.http.routers.api.tls.certresolver=letsencrypt
+      # NOTE: no certresolver by default — Traefik serves its built-in self-signed cert.
+      # docker-compose.prod.yml overlays a Let's Encrypt resolver via labels + static config.
       - traefik.http.routers.api.middlewares=rate-limit@file,secure-headers@file,compression@file
       - traefik.http.services.api.loadbalancer.server.port=8000
 
@@ -1623,7 +1661,7 @@ services:
     networks: [backend]
     depends_on:
       api:
-        condition: service_healthy
+        condition: service_started    # edge router must not block on backend health
 ```
 
 - [ ] **Step 2: Commit**
@@ -1644,9 +1682,10 @@ git commit -m "feat: add docker-compose.yml for P1 foundation stack"
 
 ```yaml
 # Dev overrides:
-# - disables Let's Encrypt (self-signed or plain HTTP only)
 # - mounts source for api hot-reload
 # - exposes postgres/redis to host for direct inspection
+# TLS in dev: Traefik's default config has no cert resolver, so it serves its
+# built-in self-signed cert. Use `curl -k` / browser "accept risk".
 services:
   postgres:
     ports: ["5432:5432"]
@@ -1658,13 +1697,6 @@ services:
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:
       - ./api/src:/app/src
-
-  traefik:
-    command:
-      - --configFile=/etc/traefik/traefik.yml
-      - --entrypoints.websecure.http.tls=true
-    labels:
-      - traefik.http.routers.api.tls.certresolver=
 ```
 
 - [ ] **Step 2: Commit**
@@ -1672,6 +1704,52 @@ services:
 ```bash
 git add docker-compose.dev.yml
 git commit -m "feat: add docker-compose.dev.yml with host-exposed DB/Redis and api hot-reload"
+```
+
+---
+
+### Task 4.5b: Compose prod overlay (ACME / Let's Encrypt)
+
+**Files:**
+- Create: `docker-compose.prod.yml`
+
+- [ ] **Step 1: Write `docker-compose.prod.yml`**
+
+```yaml
+# Production overlay:
+# - enables Let's Encrypt HTTP-01 ACME via Traefik CLI args (no static-config edit)
+# - wires the api router to the `letsencrypt` resolver
+# - persists ACME state to the `traefik-certs` named volume
+#
+# Requires in .env:
+#   ACME_EMAIL=ops@yourdomain.example
+#
+# Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+volumes:
+  traefik-certs:
+
+services:
+  traefik:
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+      - --certificatesResolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesResolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesResolvers.letsencrypt.acme.httpChallenge.entryPoint=web
+    volumes:
+      - traefik-certs:/letsencrypt
+
+  api:
+    labels:
+      - traefik.http.routers.api.tls.certresolver=letsencrypt
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add docker-compose.prod.yml
+git commit -m "feat: add docker-compose.prod.yml overlay for Let's Encrypt in production"
 ```
 
 ---
@@ -1689,49 +1767,69 @@ Create `tests/smoke/__init__.py` (empty).
 Create `tests/smoke/test_stack_smoke.py`:
 
 ```python
-"""Smoke test: `docker compose up` → migrate runs → api /health/ready is 200.
+"""Smoke test: `docker compose up` → migrate runs → api /health/ready returns 200.
 
 Skipped when DOCKER_SMOKE is not set (so unit CI is fast). Runs in a dedicated
 compose-smoke CI job that sets DOCKER_SMOKE=1.
+
+A passing smoke test requires:
+  - migrate container ran to completion with exit code 0
+  - api's /health/ready returns 200 with both components healthy
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
-import urllib.request
 
 import pytest
 
 DOCKER_SMOKE = os.environ.get("DOCKER_SMOKE") == "1"
 pytestmark = pytest.mark.skipif(not DOCKER_SMOKE, reason="DOCKER_SMOKE not set")
 
+COMPOSE_FILES = ["-f", "docker-compose.yml", "-f", "docker-compose.dev.yml"]
 
-def _compose(*args: str) -> subprocess.CompletedProcess[str]:
+
+def _compose(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["docker", "compose", *args],
-        check=True,
-        text=True,
-        capture_output=True,
+        ["docker", "compose", *COMPOSE_FILES, *args],
+        env=env, text=True, capture_output=True, check=True,
     )
 
 
-def _wait_for_ready(port: int, path: str, timeout_s: int = 120) -> int:
-    url = f"http://localhost:{port}{path}"
+def _probe_ready(env: dict[str, str], timeout_s: int = 120) -> dict[str, object]:
+    """Call /health/ready from inside the api container until it returns 200.
+
+    Returns the parsed JSON body. Raises on timeout or non-200 status.
+    """
     deadline = time.monotonic() + timeout_s
-    last_err: Exception | None = None
+    last_err: str = ""
     while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(url, timeout=3) as r:
-                return r.status
-        except Exception as exc:  # noqa: BLE001
-            last_err = exc
-            time.sleep(2)
-    raise TimeoutError(f"{url} not ready within {timeout_s}s: {last_err}")
+        result = subprocess.run(
+            [
+                "docker", "compose", *COMPOSE_FILES,
+                "exec", "-T", "api",
+                "python", "-c",
+                "import json,sys,urllib.request;"
+                "r=urllib.request.urlopen('http://localhost:8000/health/ready');"
+                "sys.stdout.write(str(r.status)+'\\n'+r.read().decode())",
+            ],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        if result.returncode == 0:
+            status_line, _, body = result.stdout.partition("\n")
+            if status_line.strip() == "200":
+                return json.loads(body)
+            last_err = f"HTTP {status_line.strip()}: {body.strip()}"
+        else:
+            last_err = result.stderr.strip() or result.stdout.strip()
+        time.sleep(2)
+    raise TimeoutError(f"/health/ready not 200 within {timeout_s}s: {last_err}")
 
 
-def test_stack_comes_up_and_migrate_applies(tmp_path) -> None:
-    # Use host-exposed ports via dev overrides for probing.
+@pytest.fixture
+def smoke_env() -> dict[str, str]:
     env = os.environ.copy()
     env["APP_DOMAIN"] = "localhost"
     env["POSTGRES_USER"] = "ztna"
@@ -1739,45 +1837,34 @@ def test_stack_comes_up_and_migrate_applies(tmp_path) -> None:
     env["POSTGRES_DB"] = "ztna"
     env["DATABASE_URL"] = "postgresql+asyncpg://ztna:smoke@postgres:5432/ztna"
     env["REDIS_URL"] = "redis://redis:6379/0"
+    env["ACME_EMAIL"] = ""
+    return env
 
-    # Boot stack
-    subprocess.run(
-        [
-            "docker", "compose",
-            "-f", "docker-compose.yml",
-            "-f", "docker-compose.dev.yml",
-            "up", "-d", "--build",
-        ],
-        env=env, check=True,
-    )
+
+def test_stack_comes_up_and_migrate_applies(smoke_env: dict[str, str]) -> None:
+    _compose(smoke_env, "up", "-d", "--build")
     try:
-        # migrate runs and exits successfully — check exit code
-        result = subprocess.run(
-            ["docker", "compose", "ps", "--format", "json", "migrate"],
-            env=env, text=True, capture_output=True, check=True,
+        # migrate must have exited successfully (it runs once and exits).
+        ps = subprocess.run(
+            ["docker", "compose", *COMPOSE_FILES, "ps", "-a", "--format", "json", "migrate"],
+            env=smoke_env, text=True, capture_output=True, check=True,
         )
-        # api must become healthy
-        # (Traefik publishes 443; dev override does not enforce TLS, but api is
-        # reachable via the docker network. We use the host-exposed postgres
-        # port as a basic liveness signal.)
-        time.sleep(5)
-        assert "smoke" in env["POSTGRES_PASSWORD"]  # tautology placeholder
-        # Actual readiness probe: run a one-off container on the backend net.
-        ready = subprocess.run(
-            [
-                "docker", "compose", "exec", "-T", "api",
-                "python", "-c",
-                "import urllib.request,sys;"
-                "r=urllib.request.urlopen('http://localhost:8000/health/ready');"
-                "sys.exit(0 if r.status in (200,503) else 2)",
-            ],
-            env=env, check=False,
+        # `ps --format json` emits one JSON object per line; parse whichever form.
+        raw = ps.stdout.strip()
+        rows = [json.loads(ln) for ln in raw.splitlines() if ln.strip()] if raw.startswith("{") \
+            else json.loads(raw) if raw else []
+        assert rows, "migrate container not found in docker compose ps"
+        migrate_state = rows[0]
+        assert migrate_state.get("ExitCode", 1) == 0, (
+            f"migrate did not exit cleanly: {migrate_state}"
         )
-        assert ready.returncode == 0
+
+        body = _probe_ready(smoke_env)
+        assert body == {"status": "ok", "components": {"db": True, "redis": True}}, body
     finally:
         subprocess.run(
-            ["docker", "compose", "down", "-v", "--remove-orphans"],
-            env=env, check=False,
+            ["docker", "compose", *COMPOSE_FILES, "down", "-v", "--remove-orphans"],
+            env=smoke_env, check=False,
         )
 ```
 
@@ -1788,25 +1875,42 @@ Expected: PASS (takes ~60–120 s first time due to image build).
 
 - [ ] **Step 3: Wire smoke test into existing CI**
 
-Modify `.github/workflows/validate-docker-compose.yml` — at the end of the `smoke-test` job, add a step:
+**3a.** Inspect `.github/workflows/validate-docker-compose.yml` and locate the `smoke-test` job. Insert the two steps below **after** `actions/checkout` and **before** the existing `docker compose up -d` step (the smoke test drives compose itself, so remove or gate the job's in-line `docker compose up` if it conflicts — the pytest-driven smoke test replaces it). Keep the existing teardown step as a safety net.
+
+Diff to apply (illustrative — match indentation to the existing job):
 
 ```yaml
-      - name: Run stack smoke test
-        env:
-          DOCKER_SMOKE: "1"
-          APP_DOMAIN: localhost
-          POSTGRES_USER: ztna
-          POSTGRES_PASSWORD: smoke
-          POSTGRES_DB: ztna
-          DATABASE_URL: postgresql+asyncpg://ztna:smoke@postgres:5432/ztna
-          REDIS_URL: redis://redis:6379/0
-          ACME_EMAIL: ""
-        run: |
-          pip install pytest
-          pytest tests/smoke/test_stack_smoke.py -v
+    - uses: actions/checkout@v4      # existing
+
+    # NEW: set up Python for the pytest smoke driver
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: pip
+
+    # NEW: run the pytest smoke test (drives docker compose up/down itself)
+    - name: Run stack smoke test
+      env:
+        DOCKER_SMOKE: "1"
+        APP_DOMAIN: localhost
+        POSTGRES_USER: ztna
+        POSTGRES_PASSWORD: smoke
+        POSTGRES_DB: ztna
+        DATABASE_URL: postgresql+asyncpg://ztna:smoke@postgres:5432/ztna
+        REDIS_URL: redis://redis:6379/0
+        ACME_EMAIL: ""
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest
+        pytest tests/smoke/test_stack_smoke.py -v
+
+    # REMOVE or gate: the existing "docker compose up -d" and manual health
+    # checks in this job are now redundant — the pytest smoke test brings the
+    # stack up, probes readiness, and tears it down. Either delete those
+    # steps, or wrap them in `if: ${{ false }}` until removed in a follow-up.
 ```
 
-(If the existing workflow structure differs, place this after Docker is available and before the teardown step.)
+**3b.** If the existing job has its own `docker compose up -d` + sleep + container-inspect steps, delete them in the same commit. Keep only the existing "always-run" teardown step (`if: always()` with `docker compose down -v`) as a double-safety net.
 
 - [ ] **Step 4: Commit**
 
@@ -1857,8 +1961,10 @@ This brings up: `traefik`, `postgres`, `redis`, `migrate` (runs once, applies Al
 docker compose ps
 # api should be "healthy"
 
-docker compose exec api curl -sf http://localhost:8000/health/ready
-# JSON: { "status": "ok", "components": { "db": true, "redis": true } }
+# `api` image is python:3.12-slim (no curl). Use python inline:
+docker compose exec api python -c \
+  "import urllib.request,sys; print(urllib.request.urlopen('http://localhost:8000/health/ready').read().decode())"
+# JSON: {"status":"ok","components":{"db":true,"redis":true}}
 ```
 
 ### Tear down
@@ -1923,7 +2029,7 @@ Expected: count ≥ 40.
 docker compose exec postgres psql -U ztna -d ztna -c "SELECT job_id, application_name, schedule_interval FROM timescaledb_information.jobs;"
 ```
 
-Expected: at least the `_policy_continuous_aggregate` and `_policy_retention` entries.
+Expected: **≥ 3 background jobs** — two `_policy_retention` (one each for `flows` and `identity_events`) and one `_policy_refresh_continuous_aggregate` (for `flows_1m`). Timescale may also schedule an internal `_policy_compression` job; presence is acceptable.
 
 - [ ] **Step 4: Verify API health**
 
