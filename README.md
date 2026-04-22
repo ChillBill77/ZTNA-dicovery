@@ -1,3 +1,55 @@
+# ZTNA Flow Discovery
+
+Self-hosted near-realtime Sankey visualization of network flows, enriched with user and group identity from Entra ID / AD / Cisco ISE / Aruba ClearPass.
+
+See the design spec: [`docs/superpowers/specs/2026-04-22-ztna-flow-discovery-design.md`](docs/superpowers/specs/2026-04-22-ztna-flow-discovery-design.md).
+
+## Local development
+
+### Prerequisites
+- Docker 24+ / Docker Compose v2
+- GNU Make
+- Python 3.12 (for running tests outside the stack)
+
+### Boot the stack
+
+```bash
+cp .env.example .env
+# edit .env — at minimum set APP_DOMAIN, POSTGRES_PASSWORD
+
+make up
+```
+
+This brings up: `traefik`, `postgres`, `redis`, `migrate` (runs once, applies Alembic migrations), `api` (health endpoints only in P1).
+
+### Verify
+
+```bash
+docker compose ps
+# api should be "healthy"
+
+# `api` image is python:3.12-slim (no curl). Use python inline:
+docker compose exec api python -c \
+  "import urllib.request,sys; print(urllib.request.urlopen('http://localhost:8000/health/ready').read().decode())"
+# JSON: {"status":"ok","components":{"db":true,"redis":true}}
+```
+
+### Tear down
+
+```bash
+make down            # keeps data volumes
+make clean           # drops data volumes too
+```
+
+### Run tests
+
+```bash
+make test            # unit + integration (no Docker)
+DOCKER_SMOKE=1 pytest tests/smoke -v   # full stack smoke test
+```
+
+---
+
 # GitHub Actions – Workflow Documentation
 
 This repository uses a set of GitHub Actions workflows to automate notifications, validate infrastructure changes, and enforce merge quality gates.
