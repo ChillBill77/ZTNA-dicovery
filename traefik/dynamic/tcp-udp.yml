@@ -1,0 +1,10 @@
+# Syslog TCP/UDP routers. Services populated in P2 when ingest containers exist.
+# Entries here are commented out and switched on in P2.
+
+tcp:
+  routers: {}
+  services: {}
+
+udp:
+  routers: {}
+  services: {}
