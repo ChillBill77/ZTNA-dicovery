@@ -1,0 +1,51 @@
+name,vendor,fqdn_pattern,category,source,priority
+Microsoft 365,Microsoft,.office365.com,productivity,seeded,100
+Microsoft 365,Microsoft,.office.com,productivity,seeded,100
+SharePoint Online,Microsoft,.sharepoint.com,storage,seeded,100
+OneDrive,Microsoft,.onedrive.com,storage,seeded,100
+Exchange Online,Microsoft,.outlook.com,email,seeded,100
+Exchange Online,Microsoft,.outlook.office365.com,email,seeded,100
+Microsoft Teams,Microsoft,.teams.microsoft.com,collaboration,seeded,100
+Microsoft Teams,Microsoft,.skype.com,collaboration,seeded,100
+Microsoft Entra,Microsoft,.microsoftonline.com,identity,seeded,100
+Microsoft Graph,Microsoft,.graph.microsoft.com,identity,seeded,100
+Azure,Microsoft,.azure.com,cloud,seeded,100
+Azure,Microsoft,.azurewebsites.net,cloud,seeded,100
+Azure,Microsoft,.windows.net,cloud,seeded,100
+Google Workspace,Google,.google.com,productivity,seeded,90
+Google Workspace,Google,.googleapis.com,productivity,seeded,90
+Gmail,Google,.gmail.com,email,seeded,100
+Google Drive,Google,.drive.google.com,storage,seeded,100
+Salesforce,Salesforce,.salesforce.com,crm,seeded,100
+Salesforce,Salesforce,.force.com,crm,seeded,100
+Slack,Slack,.slack.com,collaboration,seeded,100
+Zoom,Zoom,.zoom.us,collaboration,seeded,100
+GitHub,GitHub,.github.com,dev,seeded,100
+GitLab,GitLab,.gitlab.com,dev,seeded,100
+Atlassian,Atlassian,.atlassian.net,dev,seeded,100
+Jira,Atlassian,.atlassian.com,dev,seeded,100
+Bitbucket,Atlassian,.bitbucket.org,dev,seeded,100
+Dropbox,Dropbox,.dropbox.com,storage,seeded,100
+Box,Box,.box.com,storage,seeded,100
+AWS,AWS,.amazonaws.com,cloud,seeded,90
+AWS,AWS,.compute.amazonaws.com,cloud,seeded,100
+GCP,Google,.googleusercontent.com,cloud,seeded,90
+Cloudflare,Cloudflare,.cloudflare.com,cdn,seeded,100
+Cloudflare,Cloudflare,.cloudflareaccess.com,ztna,seeded,100
+Zscaler,Zscaler,.zscaler.net,security,seeded,100
+Okta,Okta,.okta.com,identity,seeded,100
+Auth0,Okta,.auth0.com,identity,seeded,100
+Ping Identity,Ping,.pingidentity.com,identity,seeded,100
+ServiceNow,ServiceNow,.service-now.com,itsm,seeded,100
+Workday,Workday,.workday.com,hr,seeded,100
+SAP Concur,SAP,.concursolutions.com,finance,seeded,100
+Adobe,Adobe,.adobe.com,productivity,seeded,100
+Adobe Sign,Adobe,.adobesign.com,productivity,seeded,100
+DocuSign,DocuSign,.docusign.com,productivity,seeded,100
+Webex,Cisco,.webex.com,collaboration,seeded,100
+Duo Security,Cisco,.duosecurity.com,identity,seeded,100
+Splunk Cloud,Splunk,.splunkcloud.com,observability,seeded,100
+Datadog,Datadog,.datadoghq.com,observability,seeded,100
+New Relic,New Relic,.newrelic.com,observability,seeded,100
+Sentry,Sentry,.sentry.io,observability,seeded,100
+PagerDuty,PagerDuty,.pagerduty.com,ops,seeded,100

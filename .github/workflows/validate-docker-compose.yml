@@ -146,48 +146,35 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Start services
+      # Set up Python for the pytest smoke driver (replaces the previous
+      # manual `docker compose up` + container-inspect steps).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Drives docker compose up/down itself and probes /health/ready.
+      - name: Run stack smoke test
+        env:
+          DOCKER_SMOKE: "1"
+          APP_DOMAIN: localhost
+          POSTGRES_USER: ztna
+          POSTGRES_PASSWORD: smoke
+          POSTGRES_DB: ztna
+          DATABASE_URL: postgresql+asyncpg://ztna:smoke@postgres:5432/ztna
+          REDIS_URL: redis://redis:6379/0
+          ACME_EMAIL: ""
         run: |
-          docker compose -f ${{ needs.lint.outputs.compose-file }} up -d
-
-      - name: Wait 30 seconds for services to stabilise
-        run: sleep 30
-
-      - name: Check for restarts or crashed containers
-        id: health-check
-        run: |
-          COMPOSE_FILE="${{ needs.lint.outputs.compose-file }}"
-          FAILED=false
-
-          for container in $(docker compose -f "$COMPOSE_FILE" ps -q); do
-            NAME=$(docker inspect --format '{{.Name}}' "$container" | tr -d '/')
-            RESTARTS=$(docker inspect --format '{{.RestartCount}}' "$container")
-            STATE=$(docker inspect --format '{{.State.Status}}' "$container")
-
-            if [[ "$STATE" != "running" ]]; then
-              echo "::error::Container $NAME is not running (state: $STATE)"
-              FAILED=true
-            fi
-            if [[ "$RESTARTS" -gt 0 ]]; then
-              echo "::error::Container $NAME restarted ${RESTARTS} time(s)"
-              FAILED=true
-            fi
-          done
-
-          if [ "$FAILED" = true ]; then
-            echo "::error::One or more services failed or restarted. Blocking merge."
-            docker compose -f "$COMPOSE_FILE" logs --tail=50
-            exit 1
-          fi
-
-          echo "✅ All containers healthy with no restarts."
+          python -m pip install --upgrade pip
+          pip install pytest
+          pytest tests/smoke/test_stack_smoke.py -v
 
       - name: Collect and analyse logs
         id: check-logs
         if: success()
         run: |
           COMPOSE_FILE="${{ needs.lint.outputs.compose-file }}"
-          LOG_OUTPUT=$(docker compose -f "$COMPOSE_FILE" logs --no-color 2>&1)
+          LOG_OUTPUT=$(docker compose -f "$COMPOSE_FILE" logs --no-color 2>&1 || true)
           CRITICAL_PATTERNS="CRITICAL|FATAL|OOM|segfault|panic|killed"
           CRITICAL_HITS=$(echo "$LOG_OUTPUT" | grep -iE "$CRITICAL_PATTERNS" || true)
 
@@ -202,10 +189,11 @@ jobs:
             echo "✅ No critical errors found in logs."
           fi
 
+      # Safety-net teardown; the pytest smoke driver also tears down on finally.
       - name: Tear down services
         if: always()
         run: |
-          docker compose -f ${{ needs.lint.outputs.compose-file }} down --volumes --remove-orphans
+          docker compose -f ${{ needs.lint.outputs.compose-file }} down --volumes --remove-orphans || true
 
       - name: Notify Teams – Smoke Test Failed
         if: failure()

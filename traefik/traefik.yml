@@ -1,0 +1,47 @@
+# Default static config.
+# - Works out-of-the-box for dev (Traefik serves its built-in self-signed cert
+#   on websecure when no resolver is configured).
+# - Prod layers on an ACME resolver via docker-compose.prod.yml + Traefik CLI
+#   args; no edits to this file needed.
+log:
+  level: INFO
+
+accessLog: {}
+
+api:
+  dashboard: true
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+  firewall-syslog-udp:
+    address: ":514/udp"
+  firewall-syslog-tcp:
+    address: ":514/tcp"
+  ad-syslog-udp:
+    address: ":516/udp"
+  ad-syslog-tcp:
+    address: ":516/tcp"
+  ise-syslog-udp:
+    address: ":517/udp"
+  ise-syslog-tcp:
+    address: ":517/tcp"
+  clearpass-syslog-udp:
+    address: ":518/udp"
+  clearpass-syslog-tcp:
+    address: ":518/tcp"
+
+providers:
+  docker:
+    exposedByDefault: false
+    network: backend
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true

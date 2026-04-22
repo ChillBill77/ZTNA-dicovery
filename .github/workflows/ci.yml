@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install tools
+        run: pip install ruff mypy
+      - name: Install api with test extras (pulls pytest + pytest-asyncio + httpx)
+        run: pip install -e 'api/[test]'
+      - name: Install migrate deps
+        run: pip install -r migrate/requirements.txt
+      - name: Ruff lint
+        run: ruff check .
+      - name: Ruff format
+        run: ruff format --check .
+      - name: Mypy
+        run: mypy api/src migrate/alembic
+      - name: Pytest
+        run: pytest
+
+  no-claude-attribution:
+    # Per project policy: commit messages on this repo must not contain Claude
+    # attribution trailers. Fail the job if any commit in the PR range does.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit messages for forbidden trailers
+        run: |
+          range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          if [ -z "${{ github.event.pull_request.base.sha }}" ]; then
+            range="HEAD~20..HEAD"   # push to main: inspect last 20
+          fi
+          if git log --format='%B' "$range" | grep -iE 'Co-Authored-By:.*Claude|Generated with.*Claude Code'; then
+            echo "::error::Forbidden Claude attribution found in commit messages."
+            exit 1
+          fi
+
+  migration-roundtrip:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_USER: ci
+          POSTGRES_DB: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r migrate/requirements.txt
+      - name: alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+psycopg://ci:ci@localhost:5432/ci
+        working-directory: migrate
+        run: alembic upgrade head
+      - name: alembic downgrade base
+        env:
+          DATABASE_URL: postgresql+psycopg://ci:ci@localhost:5432/ci
+        working-directory: migrate
+        run: alembic downgrade base
+      - name: alembic upgrade head (idempotent re-run)
+        env:
+          DATABASE_URL: postgresql+psycopg://ci:ci@localhost:5432/ci
+        working-directory: migrate
+        run: alembic upgrade head

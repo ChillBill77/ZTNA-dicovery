@@ -1,0 +1,18 @@
+http:
+  middlewares:
+    rate-limit:
+      rateLimit:
+        average: 60
+        burst: 120
+    compression:
+      compress: {}
+    secure-headers:
+      headers:
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: strict-origin-when-cross-origin
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        contentSecurityPolicy: "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss:"
