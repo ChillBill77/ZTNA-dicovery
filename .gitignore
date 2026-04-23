@@ -40,3 +40,7 @@ traefik/certs/*.crt
 traefik/certs/*.key
 traefik/certs/acme.json
 !traefik/certs/.gitkeep
+
+# Backup sidecar dumps (local host volume; never committed)
+/backups/*
+!/backups/.gitkeep

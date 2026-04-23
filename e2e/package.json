@@ -3,10 +3,12 @@
   "private": true,
   "scripts": {
     "test": "playwright test",
+    "test:ci": "playwright test --reporter=line",
     "install-browsers": "playwright install --with-deps chromium"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
+    "@axe-core/playwright": "^4.9.1",
     "typescript": "^5.6.2"
   }
 }

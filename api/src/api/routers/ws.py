@@ -9,6 +9,12 @@ from api.ws_fanout import ClientState, SankeyFanout
 
 router = APIRouter(tags=["ws"])
 
+# TODO(P4-followup): gate /ws/sankey by session-cookie role (`viewer`) and cap
+# each user_upn to a single concurrent connection (close duplicates with code
+# 1008). WS auth/cap lives outside the HTTP dependency tree and needs explicit
+# cookie parsing inside the handler plus a process-local {user_upn: asyncio.Lock}
+# map; see plan P4 Task 2.3.
+
 _fanout: SankeyFanout | None = None
 
 

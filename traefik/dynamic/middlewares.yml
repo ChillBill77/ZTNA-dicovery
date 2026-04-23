@@ -1,11 +1,30 @@
 http:
   middlewares:
+    # Authenticated REST — 60 rps/IP steady, burst 120. Kept under the old
+    # `rate-limit` name for compatibility with P1 docker labels; a tighter
+    # `rate-limit-api` alias below is used by new routers.
     rate-limit:
       rateLimit:
         average: 60
         burst: 120
+    rate-limit-api:
+      rateLimit:
+        average: 60
+        burst: 120
+        period: 1s
+        sourceCriterion:
+          ipStrategy: {depth: 1}
+
+    # Unauthenticated /api/auth/* — higher ceiling to absorb login storms.
+    rate-limit-auth:
+      rateLimit:
+        average: 300
+        burst: 600
+        period: 1s
+
     compression:
       compress: {}
+
     secure-headers:
       headers:
         frameDeny: true
@@ -15,4 +34,26 @@ http:
         stsSeconds: 31536000
         stsIncludeSubdomains: true
         stsPreload: true
-        contentSecurityPolicy: "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss:"
+        # Production CSP: no inline scripts; Tailwind runtime may emit inline
+        # styles so style-src keeps 'unsafe-inline'. No dynamic <script> tags.
+        contentSecurityPolicy: >-
+          default-src 'self';
+          img-src 'self' data:;
+          script-src 'self';
+          style-src 'self' 'unsafe-inline';
+          connect-src 'self' wss:;
+          frame-ancestors 'none';
+          base-uri 'self';
+          form-action 'self'
+        permissionsPolicy: "camera=(), microphone=(), geolocation=(), payment=()"
+
+    # forwardAuth to api /auth/verify — used exclusively by the Traefik
+    # dashboard router (browser-cookie flow). Bearer-token flows don't route
+    # through this middleware (the api's own RBAC gates those).
+    oidc-verify:
+      forwardAuth:
+        address: http://api:8000/auth/verify
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-User
+          - X-Roles

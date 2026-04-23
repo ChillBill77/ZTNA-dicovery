@@ -1,4 +1,4 @@
-.PHONY: up down migrate logs lint type test ci clean
+.PHONY: up down migrate logs lint type test ci clean observe
 
 COMPOSE := docker compose
 
@@ -7,6 +7,9 @@ up:
 
 down:
 	$(COMPOSE) down --remove-orphans
+
+observe:
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.observe.yml --profile observe up -d
 
 migrate:
 	$(COMPOSE) run --rm migrate

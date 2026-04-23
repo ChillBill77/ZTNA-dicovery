@@ -3,11 +3,16 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth.roles import require_role
 from api.dependencies import db_session
 from api.schemas.groups import GroupMembers
 from api.services.groups_service import GroupsService
 
-router = APIRouter(prefix="/api/groups", tags=["groups"])
+router = APIRouter(
+    prefix="/api/groups",
+    tags=["groups"],
+    dependencies=[require_role("viewer")],
+)
 
 
 def _groups_service(

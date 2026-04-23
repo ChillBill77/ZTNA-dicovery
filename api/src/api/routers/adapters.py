@@ -7,10 +7,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth.roles import require_role
 from api.dependencies import db_session, redis_client
 from api.schemas.adapters import AdapterHealth, Stats
 
-router = APIRouter(tags=["adapters"])
+router = APIRouter(tags=["adapters"], dependencies=[require_role("viewer")])
 
 
 @router.get("/api/adapters", response_model=list[AdapterHealth])

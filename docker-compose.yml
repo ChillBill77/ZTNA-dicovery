@@ -171,3 +171,19 @@ services:
         condition: service_started
     networks: [backend]
     restart: unless-stopped
+
+  backup:
+    build: ./backup
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backups:/backups
+    networks: [backend]
+    restart: unless-stopped

@@ -1,0 +1,122 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "datasource", "uid": "grafana"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "ZTNA flow discovery — ingress, correlator, api, and identity overview. Seed panels cover the metrics enumerated in P4 Task 3.4; extend via the Grafana UI and re-export this JSON.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [
+        {
+          "expr": "sum(rate(flow_ingest_events_total[1m])) by (adapter)",
+          "legendFormat": "{{adapter}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Flow ingest rate (per adapter)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "targets": [
+        {
+          "expr": "correlator_queue_depth",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Correlator queue depth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "targets": [
+        {
+          "expr": "rate(correlator_dropped_flows_total[5m])",
+          "legendFormat": "dropped",
+          "refId": "A"
+        }
+      ],
+      "title": "Correlator drops (5m rate)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 4,
+      "targets": [
+        {
+          "expr": "correlator_unknown_user_ratio",
+          "legendFormat": "unknown",
+          "refId": "A"
+        }
+      ],
+      "title": "Unknown user ratio",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+      "id": 5,
+      "targets": [{"expr": "api_ws_connections", "refId": "A"}],
+      "title": "WS connections",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+      "id": 6,
+      "targets": [{"expr": "identity_index_size", "refId": "A"}],
+      "title": "Identity index size",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+      "id": 7,
+      "targets": [{"expr": "rate(correlator_lcd_miss_total[5m])", "refId": "A"}],
+      "title": "LCD miss rate",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["ztna"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "ZTNA Overview",
+  "uid": "ztna-overview",
+  "version": 1,
+  "weekStart": ""
+}

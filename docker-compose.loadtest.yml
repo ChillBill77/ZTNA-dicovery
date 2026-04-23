@@ -1,0 +1,43 @@
+# Load-test overlay.
+#
+# Usage (defaults to the `sustained` scenario):
+#   docker compose -f docker-compose.yml -f docker-compose.loadtest.yml \
+#       --profile loadtest up -d
+#
+# Override scenario at run time:
+#   LOAD_SCENARIO=burst docker compose ... up -d
+
+services:
+  locust-master:
+    build: ./loadtest
+    profiles: [loadtest]
+    env_file: .env
+    environment:
+      LOAD_SCENARIO: ${LOAD_SCENARIO:-sustained}
+      SYSLOG_HOST: traefik
+      FIREWALL_PORT: "514"
+      AD_PORT: "516"
+      ISE_PORT: "517"
+    command:
+      - --headless
+      - --users=200
+      - --spawn-rate=200
+      - --run-time=10m
+      - --host=http://api:8000
+      - --only-summary
+    networks: [backend]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  locust-worker:
+    build: ./loadtest
+    profiles: [loadtest]
+    env_file: .env
+    environment:
+      LOAD_SCENARIO: ${LOAD_SCENARIO:-sustained}
+      SYSLOG_HOST: traefik
+    command: ["--worker", "--master-host=locust-master"]
+    deploy:
+      replicas: 4
+    networks: [backend]

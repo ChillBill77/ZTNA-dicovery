@@ -9,12 +9,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth.roles import require_role
 from api.cursor import CursorPayload, decode_cursor, encode_cursor
 from api.dependencies import db_session, redis_client
 from api.schemas.flows import RawFlow, RawFlowsPage
 from api.schemas.sankey import SankeyDelta
 
-router = APIRouter(prefix="/api/flows", tags=["flows"])
+router = APIRouter(
+    prefix="/api/flows",
+    tags=["flows"],
+    dependencies=[require_role("viewer")],
+)
 
 LIVE_KEY = "sankey.last"
 
