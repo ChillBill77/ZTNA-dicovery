@@ -1,0 +1,3 @@
+{"ts":"2026-04-22T12:00:00Z","src_ip":"10.0.0.1","user_upn":"ad_user","source":"ad_4624","event_type":"logon","confidence":90,"ttl_seconds":3600}
+{"ts":"2026-04-22T12:00:05Z","src_ip":"10.0.0.1","user_upn":"entra_user","source":"entra_signin","event_type":"logon","confidence":80,"ttl_seconds":3600}
+{"ts":"2026-04-22T12:00:08Z","src_ip":"10.0.0.1","user_upn":"nac_user","source":"cisco_ise","event_type":"nac-auth","confidence":95,"ttl_seconds":3600}

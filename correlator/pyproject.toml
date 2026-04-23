@@ -9,6 +9,7 @@ dependencies = [
   "asyncpg==0.29.0",
   "loguru==0.7.2",
   "uvloop==0.20.0",
+  "intervaltree==3.1.0",
 ]
 
 [project.optional-dependencies]

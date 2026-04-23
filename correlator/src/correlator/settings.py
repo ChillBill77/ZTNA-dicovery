@@ -8,8 +8,17 @@ class CorrelatorSettings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     database_url: str = "postgresql://ztna:change-me@postgres:5432/ztna"
     flows_stream: str = "flows.raw"
+    identity_stream: str = "identity.events"
     window_s: int = 5
     queue_max: int = 10_000
     batch_size: int = 10_000
     flush_ms: int = 500
     log_level: str = "INFO"
+
+    # Identity + LCD (P3).
+    excluded_groups: list[str] = [
+        "Domain Users",
+        "Authenticated Users",
+        "Everyone",
+    ]
+    single_user_floor: int = 500

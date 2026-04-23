@@ -10,7 +10,15 @@ from fastapi.staticfiles import StaticFiles
 
 from api.db import init_engine, ping_db
 from api.redis import init_redis, ping_redis
-from api.routers import adapters, applications, flows, saas, ws
+from api.routers import (
+    adapters,
+    applications,
+    flows,
+    groups,
+    identity,
+    saas,
+    ws,
+)
 from api.routers.ws import shutdown as ws_shutdown
 from api.routers.ws import startup as ws_startup
 from api.settings import Settings
@@ -52,6 +60,8 @@ def build_app() -> FastAPI:
     app.include_router(applications.router)
     app.include_router(saas.router)
     app.include_router(adapters.router)
+    app.include_router(identity.router)
+    app.include_router(groups.router)
     app.include_router(ws.router)
 
     # When the web SPA has been bundled into /app/web-dist, serve it at root.

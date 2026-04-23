@@ -120,6 +120,30 @@ services:
       - "5514/tcp"
     restart: unless-stopped
 
+  id-ingest:
+    build:
+      context: .
+      dockerfile: id-ingest/Dockerfile
+    env_file: .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./id-ingest/configs:/etc/flowvis/adapters:ro
+    networks: [backend]
+    expose:
+      - "516/udp"
+      - "516/tcp"
+      - "517/udp"
+      - "517/tcp"
+      - "518/udp"
+      - "518/tcp"
+    restart: unless-stopped
+
   resolver:
     build:
       context: .

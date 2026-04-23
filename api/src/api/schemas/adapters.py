@@ -17,3 +17,6 @@ class Stats(BaseModel):
     unknown_user_ratio: float = 0.0
     redis_lag_ms: float = 0.0
     lossy_windows_total: int = 0
+    # Seconds since the most recent user_groups refresh; None if the sync has
+    # never run (or its service is offline). Front-end alert at > 48h.
+    group_sync_age_seconds: float | None = None

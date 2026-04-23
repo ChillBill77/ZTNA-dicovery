@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from pathlib import Path
-
-import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Backwards-compatible re-export: the YAML loader and AdapterConfig dataclass
+# now live in ztna_common so both flow-ingest and id-ingest share the shape.
+from ztna_common.config import AdapterConfig, load_adapter_configs
 
-@dataclass(frozen=True)
-class AdapterConfig:
-    enabled: bool = True
-    source_ips: frozenset[str] = field(default_factory=frozenset)
+__all__ = ["AdapterConfig", "IngestSettings", "load_adapter_configs"]
 
 
 class IngestSettings(BaseSettings):
@@ -21,14 +17,3 @@ class IngestSettings(BaseSettings):
     config_dir: str = "/etc/flowvis/adapters"
     log_level: str = "INFO"
     queue_max: int = 10_000
-
-
-def load_adapter_configs(path: Path) -> dict[str, AdapterConfig]:
-    out: dict[str, AdapterConfig] = {}
-    for yml in sorted(path.glob("*.yaml")):
-        data = yaml.safe_load(yml.read_text()) or {}
-        out[yml.stem] = AdapterConfig(
-            enabled=bool(data.get("enabled", True)),
-            source_ips=frozenset(data.get("source_ips", []) or []),
-        )
-    return out

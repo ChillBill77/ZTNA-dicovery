@@ -9,7 +9,11 @@ dependencies = [
   "loguru==0.7.2",
   "pyyaml==6.0.2",
   "uvloop==0.20.0",
+  "ztna-common",
 ]
+
+[tool.uv.sources]
+ztna-common = { path = "../common", editable = true }
 
 [project.optional-dependencies]
 test = [

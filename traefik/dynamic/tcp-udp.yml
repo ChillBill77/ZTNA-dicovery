@@ -1,6 +1,9 @@
-# Firewall syslog routers: forward both TCP and UDP on :514 to flow-ingest:5514.
-# AD/ISE/ClearPass entrypoints are intentionally empty here; they will be
-# populated in P3 alongside id-ingest.
+# Raw syslog routers for firewall + identity feeds.
+#
+# Traefik TCP/UDP cannot route by source IP, so each identity entrypoint
+# forwards indiscriminately to the matching id-ingest port. Adapter YAML in
+# /etc/flowvis/adapters/<name>.yaml scopes which source IPs each adapter
+# accepts; others are dropped and counted under id_ingest_source_ip_mismatch.
 
 tcp:
   routers:
@@ -8,24 +11,72 @@ tcp:
       entryPoints: [firewall-syslog-tcp]
       rule: "HostSNI(`*`)"
       service: flow-ingest-tcp
+
+    ad-syslog-tcp:
+      entryPoints: [ad-syslog-tcp]
+      rule: "HostSNI(`*`)"
+      service: id-ingest-ad-tcp
+
+    ise-syslog-tcp:
+      entryPoints: [ise-syslog-tcp]
+      rule: "HostSNI(`*`)"
+      service: id-ingest-ise-tcp
+
+    clearpass-syslog-tcp:
+      entryPoints: [clearpass-syslog-tcp]
+      rule: "HostSNI(`*`)"
+      service: id-ingest-clearpass-tcp
+
   services:
     flow-ingest-tcp:
       loadBalancer:
         servers:
           - address: "flow-ingest:5514"
+    id-ingest-ad-tcp:
+      loadBalancer:
+        servers:
+          - address: "id-ingest:516"
+    id-ingest-ise-tcp:
+      loadBalancer:
+        servers:
+          - address: "id-ingest:517"
+    id-ingest-clearpass-tcp:
+      loadBalancer:
+        servers:
+          - address: "id-ingest:518"
 
 udp:
   routers:
     firewall-syslog-udp:
       entryPoints: [firewall-syslog-udp]
       service: flow-ingest-udp
+
+    ad-syslog-udp:
+      entryPoints: [ad-syslog-udp]
+      service: id-ingest-ad-udp
+
+    ise-syslog-udp:
+      entryPoints: [ise-syslog-udp]
+      service: id-ingest-ise-udp
+
+    clearpass-syslog-udp:
+      entryPoints: [clearpass-syslog-udp]
+      service: id-ingest-clearpass-udp
+
   services:
     flow-ingest-udp:
       loadBalancer:
         servers:
           - address: "flow-ingest:5514"
-
-# Identity entrypoints — populated in P3:
-#   ad-syslog-udp / ad-syslog-tcp        → id-ingest:5516
-#   ise-syslog-udp / ise-syslog-tcp      → id-ingest:5517
-#   clearpass-syslog-udp / clearpass-syslog-tcp → id-ingest:5518
+    id-ingest-ad-udp:
+      loadBalancer:
+        servers:
+          - address: "id-ingest:516"
+    id-ingest-ise-udp:
+      loadBalancer:
+        servers:
+          - address: "id-ingest:517"
+    id-ingest-clearpass-udp:
+      loadBalancer:
+        servers:
+          - address: "id-ingest:518"

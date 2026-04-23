@@ -1,0 +1,1 @@
+<13>2026-04-22T12:01:00.000Z DC01 winlogbeat[1234]: {"event_id":4624,"@timestamp":"2026-04-22T12:01:00.000Z","winlog":{"event_data":{"TargetUserName":"svc_backup","TargetDomainName":"CORP","LogonType":"3","IpAddress":"10.0.5.17","WorkstationName":"FILES01","LogonGuid":"{b2c3d4e5-2222-3333-4444-555566667777}"}}}

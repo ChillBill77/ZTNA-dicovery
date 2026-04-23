@@ -1,0 +1,7 @@
+{
+  "@odata.nextLink": "https://graph.microsoft.com/v1.0/users/alice@corp.example/transitiveMemberOf?$skiptoken=abc",
+  "value": [
+    {"@odata.type": "#microsoft.graph.group", "id": "g-sales", "displayName": "Sales EMEA"},
+    {"@odata.type": "#microsoft.graph.group", "id": "g-all", "displayName": "Everyone"}
+  ]
+}
