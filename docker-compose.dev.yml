@@ -14,3 +14,19 @@ services:
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:
       - ./api/src:/app/src
+
+  mock-syslog-generator:
+    build:
+      context: .
+      dockerfile: mock-syslog-generator/Dockerfile
+    env_file: .env
+    environment:
+      MOCKGEN_TARGET_HOST: traefik
+      MOCKGEN_TARGET_PORT: 514
+      MOCKGEN_RATE_PER_S: 100
+    depends_on:
+      traefik:
+        condition: service_started
+    profiles: ["dev"]
+    networks: [backend]
+    restart: unless-stopped
