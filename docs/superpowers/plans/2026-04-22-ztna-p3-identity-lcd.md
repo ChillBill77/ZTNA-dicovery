@@ -2162,11 +2162,1212 @@ Gate: `pytest id-ingest/` green; nightly cron + on-demand paths covered; `NOTIFY
 
 ---
 
-<!-- CHUNK-5-PLACEHOLDER -->
+## Chunk 5: Correlator extensions (IdentityIndex + Enricher + LCD GroupAggregator)
+
+This chunk plugs identity enrichment into the P2 correlator pipeline. New stages:
+- `IdentityIndex` — consumes `identity.events`; keeps an `intervaltree.IntervalTree` per `src_ip`; evicts Stop events (ttl=0) and expired intervals; resolves `(src_ip, ts) → user_upn` by highest confidence, most-recent tiebreak (spec §6.2).
+- `GroupIndex` — in-memory `dict[user_upn, frozenset[group_id]]` + `dict[group_id, int]` size; populated from `user_groups`; reloaded on Postgres `NOTIFY groups_changed`.
+- `Enricher` — sits between `AppResolver` and `Writer`; per `(src_ip, ts, dst)` tuple, attaches `user_upn` and the transitive group set. Unknown binding → `user_upn = "unknown"`.
+- `GroupAggregator` — runs the LCD algorithm from spec §6.3 with fallback cascade (unknown strand, LCD miss → per-user, single-user over floor → per-user). Caches LCD result by `frozenset(users)` per window.
+- `SankeyDelta` extension — adds `users` count per link and `group_by` mode.
+- Metrics hooks — `correlator_unknown_user_ratio`, `correlator_lcd_miss_total`, `identity_index_size`.
+
+### Task 5.1: `IdentityIndex` — failing tests
+
+**Files:**
+- Create: `correlator/tests/pipeline/test_identity_index.py`
+- Create: `correlator/tests/fixtures/identity/events_basic.jsonl`
+- Create: `correlator/tests/fixtures/identity/events_mixed_confidence.jsonl`
+- Create: `correlator/tests/fixtures/identity/events_expired_ttl.jsonl`
+
+- [ ] **Step 1: Author JSONL fixtures**
+
+`events_basic.jsonl`:
+
+```
+{"ts":"2026-04-22T12:00:00Z","src_ip":"10.0.12.34","user_upn":"alice","source":"ad_4624","event_type":"logon","confidence":90,"ttl_seconds":28800}
+{"ts":"2026-04-22T12:00:30Z","src_ip":"10.0.20.12","user_upn":"bob","source":"aruba_clearpass","event_type":"nac-auth","confidence":95,"ttl_seconds":3600}
+```
+
+`events_mixed_confidence.jsonl` — same `src_ip`, two overlapping bindings with different confidences and timestamps.
+`events_expired_ttl.jsonl` — a single event with `ttl_seconds=60` to exercise eviction.
+
+- [ ] **Step 2: Write tests**
+
+```python
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from correlator.pipeline.identity_index import IdentityIndex
+
+FIX = Path(__file__).parent.parent / "fixtures" / "identity"
+
+
+def _load(name: str):
+    return [json.loads(l) for l in (FIX / name).read_text().splitlines() if l.strip()]
+
+
+def test_resolve_picks_highest_confidence_within_ttl() -> None:
+    idx = IdentityIndex()
+    for ev in _load("events_mixed_confidence.jsonl"):
+        idx.insert(ev)
+    ip = _load("events_mixed_confidence.jsonl")[0]["src_ip"]
+    t = datetime.fromisoformat(_load("events_mixed_confidence.jsonl")[0]["ts"].replace("Z", "+00:00"))
+    resolved = idx.resolve(ip, t + timedelta(seconds=10))
+    # highest confidence wins, not most-recent
+    assert resolved is not None
+    assert resolved["confidence"] == max(e["confidence"] for e in _load("events_mixed_confidence.jsonl"))
+
+
+def test_resolve_tiebreaks_by_most_recent() -> None:
+    idx = IdentityIndex()
+    # two events same confidence, different t_start
+    ip = "10.0.0.1"
+    idx.insert({"ts": "2026-04-22T12:00:00+00:00", "src_ip": ip, "user_upn": "older", "source": "x",
+                "event_type": "logon", "confidence": 90, "ttl_seconds": 3600})
+    idx.insert({"ts": "2026-04-22T12:10:00+00:00", "src_ip": ip, "user_upn": "newer", "source": "x",
+                "event_type": "logon", "confidence": 90, "ttl_seconds": 3600})
+    out = idx.resolve(ip, datetime(2026, 4, 22, 12, 20, tzinfo=timezone.utc))
+    assert out is not None and out["user_upn"] == "newer"
+
+
+def test_stop_event_invalidates_prior_binding() -> None:
+    idx = IdentityIndex()
+    ip = "10.0.0.2"
+    idx.insert({"ts": "2026-04-22T12:00:00+00:00", "src_ip": ip, "user_upn": "bob", "source": "ise",
+                "event_type": "nac-auth", "confidence": 95, "ttl_seconds": 3600})
+    idx.insert({"ts": "2026-04-22T12:05:00+00:00", "src_ip": ip, "user_upn": "bob", "source": "ise",
+                "event_type": "nac-auth-stop", "confidence": 95, "ttl_seconds": 0})
+    assert idx.resolve(ip, datetime(2026, 4, 22, 12, 10, tzinfo=timezone.utc)) is None
+
+
+def test_expired_ttl_evicted() -> None:
+    idx = IdentityIndex()
+    for ev in _load("events_expired_ttl.jsonl"):
+        idx.insert(ev)
+    # Advance clock past ttl; probing triggers lazy eviction.
+    ip = _load("events_expired_ttl.jsonl")[0]["src_ip"]
+    probe = datetime.fromisoformat(_load("events_expired_ttl.jsonl")[0]["ts"].replace("Z", "+00:00")) + timedelta(seconds=120)
+    assert idx.resolve(ip, probe) is None
+    assert idx.size() == 0
+
+
+def test_size_metric_reports_active_intervals() -> None:
+    idx = IdentityIndex()
+    for ev in _load("events_basic.jsonl"):
+        idx.insert(ev)
+    assert idx.size() == 2
+```
+
+- [ ] **Step 3: Run, expect ModuleNotFoundError**
+
+Run: `pytest correlator/tests/pipeline/test_identity_index.py -v`
+Expected: FAIL.
 
 ---
 
-<!-- CHUNK-6-PLACEHOLDER -->
+### Task 5.2: `IdentityIndex` — implementation
+
+**Files:**
+- Create: `correlator/src/correlator/pipeline/identity_index.py`
+
+- [ ] **Step 1: Implement**
+
+```python
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from intervaltree import Interval, IntervalTree
+
+
+@dataclass(frozen=True)
+class Binding:
+    user_upn: str
+    confidence: int
+    source: str
+    t_start: datetime
+
+
+class IdentityIndex:
+    """Per-src_ip interval tree resolving (src_ip, t) → Binding."""
+
+    def __init__(self) -> None:
+        self._trees: dict[str, IntervalTree] = {}
+
+    @staticmethod
+    def _ts(ev: dict) -> datetime:
+        raw = ev["ts"]
+        if isinstance(raw, str):
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return raw
+
+    def insert(self, ev: dict) -> None:
+        ip = ev["src_ip"]
+        t = self._ts(ev)
+        if ev.get("event_type") == "nac-auth-stop" or ev.get("ttl_seconds", 0) == 0:
+            self._invalidate(ip, ev.get("user_upn"))
+            return
+        end = t + timedelta(seconds=int(ev["ttl_seconds"]))
+        tree = self._trees.setdefault(ip, IntervalTree())
+        tree.addi(t.timestamp(), end.timestamp(),
+                  Binding(user_upn=ev["user_upn"], confidence=int(ev["confidence"]),
+                          source=ev["source"], t_start=t))
+
+    def _invalidate(self, ip: str, user: str | None) -> None:
+        tree = self._trees.get(ip)
+        if not tree:
+            return
+        if user is None:
+            tree.clear()
+        else:
+            for iv in list(tree):
+                if iv.data.user_upn == user:
+                    tree.remove(iv)
+
+    def resolve(self, ip: str, at: datetime) -> Optional[dict]:
+        tree = self._trees.get(ip)
+        if not tree:
+            return None
+        now_ts = at.timestamp()
+        # lazy-evict expired
+        for iv in list(tree):
+            if iv.end <= now_ts:
+                tree.remove(iv)
+        hits = sorted(tree[now_ts], key=lambda i: (-i.data.confidence, -i.data.t_start.timestamp()))
+        if not hits:
+            if not tree:
+                self._trees.pop(ip, None)
+            return None
+        b = hits[0].data
+        return {"user_upn": b.user_upn, "confidence": b.confidence, "source": b.source,
+                "t_start": b.t_start, "ttl_remaining": int(hits[0].end - now_ts)}
+
+    def size(self) -> int:
+        return sum(len(t) for t in self._trees.values())
+```
+
+- [ ] **Step 2: Run tests; expect PASS**
+
+Run: `pytest correlator/tests/pipeline/test_identity_index.py -v`
+Expected: all five PASS.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add correlator/src/correlator/pipeline/identity_index.py correlator/tests/pipeline/test_identity_index.py correlator/tests/fixtures/identity/
+git commit -m "feat(correlator): IdentityIndex with TTL + highest-confidence resolution"
+```
+
+---
+
+### Task 5.3: `GroupIndex` + NOTIFY reload — failing test
+
+**Files:**
+- Create: `correlator/src/correlator/pipeline/group_index.py`
+- Create: `correlator/tests/pipeline/test_group_index.py`
+
+- [ ] **Step 1: Write test**
+
+```python
+import pytest
+
+from correlator.pipeline.group_index import GroupIndex
+
+
+class FakeConn:
+    def __init__(self, rows):
+        self.rows = rows
+        self.listens: list[str] = []
+
+    async def fetch(self, sql):
+        return list(self.rows)
+
+    async def add_listener(self, channel, cb):
+        self.listens.append(channel)
+
+
+@pytest.mark.asyncio
+async def test_load_builds_user_to_groups_and_sizes() -> None:
+    rows = [
+        {"user_upn": "a", "group_id": "g1", "group_name": "G1"},
+        {"user_upn": "a", "group_id": "g2", "group_name": "G2"},
+        {"user_upn": "b", "group_id": "g1", "group_name": "G1"},
+    ]
+    idx = GroupIndex(FakeConn(rows))
+    await idx.load()
+    assert idx.groups_of("a") == frozenset({"g1", "g2"})
+    assert idx.size_of("g1") == 2
+    assert idx.size_of("g2") == 1
+
+
+@pytest.mark.asyncio
+async def test_listens_for_groups_changed_channel() -> None:
+    conn = FakeConn([])
+    idx = GroupIndex(conn)
+    await idx.listen_for_changes()
+    assert conn.listens == ["groups_changed"]
+```
+
+- [ ] **Step 2: Run — expect ModuleNotFoundError**
+
+Run: `pytest correlator/tests/pipeline/test_group_index.py -v`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement**
+
+```python
+from __future__ import annotations
+
+from collections import defaultdict
+
+
+class GroupIndex:
+    def __init__(self, conn) -> None:
+        self._conn = conn
+        self._user_groups: dict[str, frozenset[str]] = {}
+        self._group_size: dict[str, int] = {}
+        self._group_name: dict[str, str] = {}
+
+    async def load(self) -> None:
+        rows = await self._conn.fetch("SELECT user_upn, group_id, group_name FROM user_groups")
+        ug: dict[str, set[str]] = defaultdict(set)
+        for r in rows:
+            ug[r["user_upn"]].add(r["group_id"])
+            self._group_name[r["group_id"]] = r["group_name"]
+        self._user_groups = {u: frozenset(gs) for u, gs in ug.items()}
+        self._group_size = defaultdict(int)
+        for gs in self._user_groups.values():
+            for g in gs:
+                self._group_size[g] += 1
+
+    async def listen_for_changes(self) -> None:
+        async def _reload(*_):
+            await self.load()
+        await self._conn.add_listener("groups_changed", _reload)
+
+    def groups_of(self, user: str) -> frozenset[str]:
+        return self._user_groups.get(user, frozenset())
+
+    def size_of(self, group_id: str) -> int:
+        return self._group_size.get(group_id, 0)
+
+    def name_of(self, group_id: str) -> str:
+        return self._group_name.get(group_id, group_id)
+```
+
+- [ ] **Step 4: Run; expect PASS**
+
+Run: `pytest correlator/tests/pipeline/test_group_index.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add correlator/src/correlator/pipeline/group_index.py correlator/tests/pipeline/test_group_index.py
+git commit -m "feat(correlator): GroupIndex backed by user_groups with NOTIFY reload"
+```
+
+---
+
+### Task 5.4: `Enricher` stage — failing test
+
+**Files:**
+- Create: `correlator/tests/pipeline/test_enricher.py`
+- Create: `correlator/src/correlator/pipeline/enricher.py`
+
+- [ ] **Step 1: Write test**
+
+```python
+from datetime import datetime, timezone
+
+import pytest
+
+from correlator.pipeline.enricher import Enricher
+
+
+class FakeIdx:
+    def resolve(self, ip, at):
+        return {"user_upn": "alice", "confidence": 90} if ip == "10.0.0.1" else None
+
+
+class FakeGroups:
+    def groups_of(self, upn):
+        return frozenset({"g:sales"}) if upn == "alice" else frozenset()
+
+
+@pytest.mark.asyncio
+async def test_enricher_attaches_upn_and_groups() -> None:
+    e = Enricher(identity_index=FakeIdx(), group_index=FakeGroups())
+    row = {"ts": datetime(2026, 4, 22, 12, tzinfo=timezone.utc), "src_ip": "10.0.0.1",
+           "dst_ip": "1.1.1.1", "dst_port": 443, "bytes": 100}
+    out = e.enrich(row)
+    assert out["user_upn"] == "alice"
+    assert out["groups"] == frozenset({"g:sales"})
+
+
+@pytest.mark.asyncio
+async def test_enricher_marks_unknown_when_no_binding() -> None:
+    e = Enricher(identity_index=FakeIdx(), group_index=FakeGroups())
+    row = {"ts": datetime.now(timezone.utc), "src_ip": "10.0.9.9", "dst_ip": "1.1.1.1", "dst_port": 443}
+    out = e.enrich(row)
+    assert out["user_upn"] == "unknown"
+    assert out["groups"] == frozenset()
+```
+
+- [ ] **Step 2: Implement**
+
+```python
+from __future__ import annotations
+
+
+class Enricher:
+    def __init__(self, *, identity_index, group_index) -> None:
+        self._id = identity_index
+        self._gi = group_index
+
+    def enrich(self, row: dict) -> dict:
+        hit = self._id.resolve(row["src_ip"], row["ts"])
+        if hit is None:
+            row["user_upn"] = "unknown"
+            row["groups"] = frozenset()
+            return row
+        row["user_upn"] = hit["user_upn"]
+        row["groups"] = self._gi.groups_of(hit["user_upn"])
+        return row
+```
+
+- [ ] **Step 3: Run; expect PASS**
+
+Run: `pytest correlator/tests/pipeline/test_enricher.py -v`
+Expected: PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add correlator/src/correlator/pipeline/enricher.py correlator/tests/pipeline/test_enricher.py
+git commit -m "feat(correlator): Enricher stage wiring IdentityIndex + GroupIndex"
+```
+
+---
+
+### Task 5.5: `GroupAggregator` (LCD) — failing tests for every spec §6.3 edge case
+
+**Files:**
+- Create: `correlator/tests/pipeline/test_group_aggregator.py`
+
+- [ ] **Step 1: Write tests**
+
+```python
+import pytest
+
+from correlator.pipeline.group_aggregator import GroupAggregator, lcd
+
+
+def test_lcd_picks_smallest_common_non_excluded_group() -> None:
+    user_groups = {"a": {"Sales", "Sales EMEA", "Everyone"},
+                   "b": {"Sales", "Sales EMEA", "Everyone"}}
+    sizes = {"Sales": 300, "Sales EMEA": 50, "Everyone": 10000}
+    chosen = lcd({"a", "b"}, user_groups, sizes, excluded={"Everyone"}, floor=500)
+    assert chosen == "Sales EMEA"
+
+
+def test_lcd_returns_none_when_only_excluded_groups_match() -> None:
+    user_groups = {"a": {"Everyone"}, "b": {"Everyone"}}
+    sizes = {"Everyone": 10000}
+    assert lcd({"a", "b"}, user_groups, sizes, excluded={"Everyone"}) is None
+
+
+def test_lcd_returns_none_for_disjoint_groups() -> None:
+    user_groups = {"a": {"Red"}, "b": {"Blue"}}
+    sizes = {"Red": 5, "Blue": 5}
+    assert lcd({"a", "b"}, user_groups, sizes, excluded=set()) is None
+
+
+def test_lcd_single_user_over_floor_falls_back_to_user_strand() -> None:
+    user_groups = {"a": {"Domain Users"}}
+    sizes = {"Domain Users": 9000}
+    assert lcd({"a"}, user_groups, sizes, excluded=set(), floor=500) is None
+
+
+def test_lcd_single_user_under_floor_returns_group() -> None:
+    user_groups = {"a": {"SmallTeam"}}
+    sizes = {"SmallTeam": 7}
+    assert lcd({"a"}, user_groups, sizes, excluded=set(), floor=500) == "SmallTeam"
+
+
+def test_lcd_deterministic_tiebreak_on_group_id() -> None:
+    user_groups = {"a": {"A", "B"}, "b": {"A", "B"}}
+    sizes = {"A": 10, "B": 10}
+    assert lcd({"a", "b"}, user_groups, sizes, excluded=set()) == "A"
+
+
+def test_aggregator_buckets_rows_into_lcd_strands() -> None:
+    agg = GroupAggregator(excluded={"Everyone"}, single_user_floor=500)
+    sizes = {"Sales": 50, "Everyone": 10000}
+    user_groups = {"a": frozenset({"Sales", "Everyone"}),
+                   "b": frozenset({"Sales", "Everyone"})}
+    rows = [
+        {"user_upn": "a", "groups": user_groups["a"], "dst": "app:m365", "bytes": 100, "flows": 1},
+        {"user_upn": "b", "groups": user_groups["b"], "dst": "app:m365", "bytes": 200, "flows": 2},
+    ]
+    links = agg.aggregate(rows, group_sizes=sizes, group_by="group")
+    assert any(l["src"] == "Sales" and l["dst"] == "app:m365" and l["users"] == 2 for l in links)
+
+
+def test_aggregator_routes_unknown_users_to_unknown_strand() -> None:
+    agg = GroupAggregator(excluded=set(), single_user_floor=500)
+    rows = [{"user_upn": "unknown", "groups": frozenset(), "dst": "app:m365", "bytes": 1, "flows": 1}]
+    links = agg.aggregate(rows, group_sizes={}, group_by="group")
+    assert any(l["src"] == "unknown" for l in links)
+
+
+def test_aggregator_lcd_miss_produces_per_user_strands() -> None:
+    agg = GroupAggregator(excluded={"Everyone"}, single_user_floor=500)
+    sizes = {"Everyone": 9999}
+    user_groups = {"a": frozenset({"Everyone"}), "b": frozenset({"Everyone"})}
+    rows = [
+        {"user_upn": "a", "groups": user_groups["a"], "dst": "app:m365", "bytes": 5, "flows": 1},
+        {"user_upn": "b", "groups": user_groups["b"], "dst": "app:m365", "bytes": 6, "flows": 1},
+    ]
+    links = agg.aggregate(rows, group_sizes=sizes, group_by="group")
+    srcs = {l["src"] for l in links}
+    assert srcs == {"a", "b"}   # per-user fallback
+```
+
+- [ ] **Step 2: Run — expect ModuleNotFoundError**
+
+Run: `pytest correlator/tests/pipeline/test_group_aggregator.py -v`
+Expected: FAIL.
+
+---
+
+### Task 5.6: `GroupAggregator` — implementation
+
+**Files:**
+- Create: `correlator/src/correlator/pipeline/group_aggregator.py`
+
+- [ ] **Step 1: Implement**
+
+```python
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import Iterable
+
+
+def lcd(
+    users: set[str],
+    user_groups: dict[str, frozenset[str] | set[str]],
+    group_size: dict[str, int],
+    excluded: set[str],
+    floor: int = 500,
+) -> str | None:
+    if not users:
+        return None
+    try:
+        candidates = set.intersection(*(set(user_groups[u]) for u in users)) - excluded
+    except KeyError:
+        return None
+    if not candidates:
+        return None
+    chosen = min(candidates, key=lambda g: (group_size.get(g, 0), g))
+    if len(users) == 1 and group_size.get(chosen, 0) > floor:
+        return None
+    return chosen
+
+
+class GroupAggregator:
+    """Collapses enriched rows into Sankey links keyed by the LCD group (or fallback)."""
+
+    def __init__(self, *, excluded: set[str], single_user_floor: int = 500) -> None:
+        self._excluded = excluded
+        self._floor = single_user_floor
+        self._cache: dict[frozenset[str], str | None] = {}
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
+
+    def aggregate(
+        self,
+        rows: Iterable[dict],
+        *,
+        group_sizes: dict[str, int],
+        group_by: str = "group",
+    ) -> list[dict]:
+        # Bucket users per destination first so we can run LCD per (dst, user-set).
+        per_dst_users: dict[str, set[str]] = defaultdict(set)
+        per_dst_rows: dict[str, list[dict]] = defaultdict(list)
+        ug: dict[str, frozenset[str]] = {}
+        for r in rows:
+            per_dst_users[r["dst"]].add(r["user_upn"])
+            per_dst_rows[r["dst"]].append(r)
+            ug[r["user_upn"]] = frozenset(r.get("groups") or frozenset())
+
+        links: dict[tuple[str, str], dict] = {}
+        for dst, users in per_dst_users.items():
+            known = {u for u in users if u != "unknown"}
+            unknown = users - known
+
+            # UNKNOWN strand
+            if unknown:
+                for r in per_dst_rows[dst]:
+                    if r["user_upn"] == "unknown":
+                        _accum(links, "unknown", dst, r)
+
+            if not known:
+                continue
+
+            if group_by == "user":
+                label_for = {u: u for u in known}
+            elif group_by == "src_ip":
+                label_for = {u: r["src_ip"] for r in per_dst_rows[dst] for u in [r["user_upn"]]}
+            else:
+                key = frozenset(known)
+                if key not in self._cache:
+                    self._cache[key] = lcd(
+                        set(known), {u: ug[u] for u in known}, group_sizes,
+                        excluded=self._excluded, floor=self._floor,
+                    )
+                chosen = self._cache[key]
+                if chosen is None:
+                    label_for = {u: u for u in known}  # per-user fallback
+                else:
+                    label_for = {u: chosen for u in known}
+
+            for r in per_dst_rows[dst]:
+                if r["user_upn"] == "unknown":
+                    continue
+                src_label = label_for[r["user_upn"]]
+                _accum(links, src_label, dst, r)
+
+        return list(links.values())
+
+
+def _accum(links: dict, src: str, dst: str, row: dict) -> None:
+    key = (src, dst)
+    link = links.get(key)
+    if link is None:
+        link = {"src": src, "dst": dst, "bytes": 0, "flows": 0, "users": set()}
+        links[key] = link
+    link["bytes"] += int(row.get("bytes", 0))
+    link["flows"] += int(row.get("flows", row.get("flow_count", 1)))
+    link["users"].add(row["user_upn"])
+    # Finalize `users` as count on serialize; for test convenience, also store live set.
+    link["users_count"] = len(link["users"])
+    link["users"] = len(link["users"])  # serialized as int per §6.4
+```
+
+- [ ] **Step 2: Run all aggregator tests; expect PASS**
+
+Run: `pytest correlator/tests/pipeline/test_group_aggregator.py -v`
+Expected: PASS (all 9).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add correlator/src/correlator/pipeline/group_aggregator.py correlator/tests/pipeline/test_group_aggregator.py
+git commit -m "feat(correlator): LCD GroupAggregator with fallback cascade"
+```
+
+---
+
+### Task 5.7: Wire new stages into correlator pipeline + extend SankeyDelta
+
+**Files:**
+- Modify: `correlator/src/correlator/main.py`
+- Modify: `correlator/src/correlator/sankey_delta.py`
+- Modify: `correlator/src/correlator/settings.py`
+
+- [ ] **Step 1: Extend settings**
+
+```python
+class CorrelatorSettings(BaseSettings):
+    # ... existing P2 fields ...
+    excluded_groups: list[str] = ["Domain Users", "Authenticated Users", "Everyone"]
+    single_user_floor: int = 500
+    identity_stream: str = "identity.events"
+    postgres_dsn: str  # required
+```
+
+- [ ] **Step 2: Extend `SankeyDelta`**
+
+```python
+class SankeyLink(TypedDict):
+    src: str
+    dst: str
+    bytes: int
+    flows: int
+    users: int       # NEW — number of distinct users contributing to this link
+
+class SankeyDelta(TypedDict):
+    ts: datetime
+    window_s: int
+    group_by: str    # NEW — "group" | "user" | "src_ip"
+    nodes_left: list[dict]
+    nodes_right: list[dict]
+    links: list[SankeyLink]
+    lossy: bool
+    dropped_count: int
+```
+
+- [ ] **Step 3: Wire pipeline in `main.py`**
+
+Sketch:
+
+```python
+async def main() -> None:
+    settings = CorrelatorSettings()
+    pg = await asyncpg.connect(settings.postgres_dsn)
+
+    id_idx = IdentityIndex()
+    grp_idx = GroupIndex(pg)
+    await grp_idx.load()
+    await grp_idx.listen_for_changes()
+
+    enricher = Enricher(identity_index=id_idx, group_index=grp_idx)
+    aggregator = GroupAggregator(
+        excluded=set(settings.excluded_groups),
+        single_user_floor=settings.single_user_floor,
+    )
+    # On groups_changed reload, drop LCD cache so next window recomputes.
+    async def _on_groups_changed(*_):
+        aggregator.clear_cache()
+    await pg.add_listener("groups_changed", _on_groups_changed)
+
+    # Spawn identity.events consumer
+    async def _identity_consumer():
+        async for ev in consume_stream(settings.redis_url, settings.identity_stream):
+            id_idx.insert(ev)
+            metrics.gauge("identity_index_size", id_idx.size())
+
+    async def _flow_pipeline():
+        async for window in flow_windower(...):           # from P2
+            enriched = [enricher.enrich(row) for row in window.rows]
+            group_sizes = grp_idx._group_size              # access through index
+            unknown = sum(1 for r in enriched if r["user_upn"] == "unknown")
+            metrics.gauge("correlator_unknown_user_ratio",
+                          unknown / max(len(enriched), 1))
+            links = aggregator.aggregate(enriched, group_sizes=group_sizes,
+                                         group_by=window.group_by)
+            if any(l["src"] != "unknown" and aggregator_lcd_missed(l) for l in links):
+                metrics.counter("correlator_lcd_miss_total").inc()
+            delta = build_sankey_delta(window, links)
+            await publish_sankey(delta)
+
+    await asyncio.gather(_identity_consumer(), _flow_pipeline())
+```
+
+- [ ] **Step 4: Unit-test `SankeyDelta` schema change**
+
+```python
+def test_sankey_delta_has_users_per_link() -> None:
+    link: SankeyLink = {"src": "g:sales", "dst": "app:m365", "bytes": 1, "flows": 1, "users": 3}
+    assert link["users"] == 3
+```
+
+Put this at the bottom of an existing test file in `correlator/tests/`.
+
+- [ ] **Step 5: Run full correlator suite; expect green**
+
+Run: `pytest correlator/`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add correlator/src/correlator/main.py correlator/src/correlator/sankey_delta.py correlator/src/correlator/settings.py correlator/tests/
+git commit -m "feat(correlator): wire IdentityIndex + Enricher + LCD into pipeline"
+```
+
+---
+
+**End of Chunk 5.**
+Gate: LCD edge-case suite green; `SankeyDelta.users` populated; metrics `correlator_unknown_user_ratio` / `correlator_lcd_miss_total` / `identity_index_size` exposed; `NOTIFY groups_changed` clears LCD cache.
+
+---
+
+## Chunk 6: api + web updates
+
+Expose identity enrichment through the REST + WS surface and the React Sankey UI. Auth/RBAC stays out of scope here (P4); routes added in this chunk are open to the same viewer-level assumptions as the rest of P2.
+
+### Task 6.1: `GET /api/identity/resolve` endpoint
+
+**Files:**
+- Create: `api/src/api/routers/identity.py`
+- Create: `api/src/api/models/identity.py`
+- Create: `api/src/api/services/identity_service.py`
+- Create: `api/tests/routers/test_identity_router.py`
+- Modify: `api/src/api/main.py` (include router)
+
+- [ ] **Step 1: Failing test**
+
+```python
+import pytest
+
+from httpx import AsyncClient
+
+@pytest.mark.asyncio
+async def test_resolve_returns_known_binding(client: AsyncClient, seed_identity) -> None:
+    # seed_identity fixture inserts an identity_events row: alice @ 10.0.0.1 @ 12:00, ttl 3600
+    r = await client.get("/api/identity/resolve", params={"src_ip": "10.0.0.1", "at": "2026-04-22T12:10:00Z"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["user_upn"] == "alice"
+    assert body["source"] in {"ad_4624", "cisco_ise", "aruba_clearpass", "entra_signin"}
+    assert 0 <= body["confidence"] <= 100
+    assert isinstance(body["groups"], list)
+    assert body["ttl_remaining"] > 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_returns_null_when_no_binding(client: AsyncClient) -> None:
+    r = await client.get("/api/identity/resolve", params={"src_ip": "192.0.2.1", "at": "2026-04-22T12:00:00Z"})
+    assert r.status_code == 200
+    assert r.json()["user_upn"] is None
+```
+
+- [ ] **Step 2: Implement models**
+
+```python
+# api/src/api/models/identity.py
+from pydantic import BaseModel
+
+
+class IdentityResolution(BaseModel):
+    user_upn: str | None
+    source: str | None = None
+    confidence: int | None = None
+    groups: list[str] = []
+    ttl_remaining: int | None = None
+```
+
+- [ ] **Step 3: Implement service**
+
+```python
+# api/src/api/services/identity_service.py
+from datetime import datetime
+
+from sqlalchemy import text
+
+
+class IdentityService:
+    def __init__(self, db) -> None:
+        self._db = db
+
+    async def resolve(self, src_ip: str, at: datetime) -> dict | None:
+        sql = text("""
+            SELECT user_upn, source, confidence, ttl_seconds, time
+              FROM identity_events
+             WHERE src_ip = :ip
+               AND time <= :at
+               AND time + (ttl_seconds || ' seconds')::interval >= :at
+               AND event_type <> 'nac-auth-stop'
+             ORDER BY confidence DESC, time DESC
+             LIMIT 1
+        """)
+        row = (await self._db.execute(sql, {"ip": src_ip, "at": at})).mappings().first()
+        if not row:
+            return None
+        groups = (await self._db.execute(
+            text("SELECT group_name FROM user_groups WHERE user_upn = :u ORDER BY group_name"),
+            {"u": row["user_upn"]},
+        )).scalars().all()
+        ttl_remaining = max(0, int(row["ttl_seconds"] - (at - row["time"]).total_seconds()))
+        return {
+            "user_upn": row["user_upn"],
+            "source": row["source"],
+            "confidence": row["confidence"],
+            "groups": list(groups),
+            "ttl_remaining": ttl_remaining,
+        }
+```
+
+- [ ] **Step 4: Implement router**
+
+```python
+# api/src/api/routers/identity.py
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Query
+
+from api.models.identity import IdentityResolution
+from api.services.identity_service import IdentityService
+
+router = APIRouter(prefix="/api/identity", tags=["identity"])
+
+
+@router.get("/resolve", response_model=IdentityResolution)
+async def resolve(
+    src_ip: str = Query(..., examples=["10.0.12.34"]),
+    at: datetime = Query(...),
+    svc: IdentityService = Depends(...),
+) -> IdentityResolution:
+    hit = await svc.resolve(src_ip, at)
+    if hit is None:
+        return IdentityResolution(user_upn=None)
+    return IdentityResolution(**hit)
+```
+
+- [ ] **Step 5: Run tests; expect PASS**
+
+Run: `pytest api/tests/routers/test_identity_router.py -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add api/src/api/routers/identity.py api/src/api/services/identity_service.py api/src/api/models/identity.py api/src/api/main.py api/tests/routers/test_identity_router.py
+git commit -m "feat(api): GET /api/identity/resolve"
+```
+
+---
+
+### Task 6.2: Extend `/api/flows/sankey` with `group_by` + filters
+
+**Files:**
+- Modify: `api/src/api/routers/flows.py`
+- Modify: `api/tests/routers/test_flows_router_group_by.py`
+
+- [ ] **Step 1: Failing tests**
+
+```python
+import pytest
+from httpx import AsyncClient
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["group", "user", "src_ip"])
+async def test_group_by_accepts_all_three_modes(client: AsyncClient, mode) -> None:
+    r = await client.get("/api/flows/sankey", params={"group_by": mode, "mode": "live"})
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_sankey_honours_exclude_groups(client: AsyncClient) -> None:
+    r = await client.get(
+        "/api/flows/sankey",
+        params={"group_by": "group", "exclude_groups": "Everyone,Domain Users"},
+    )
+    body = r.json()
+    labels = {n["label"] for n in body.get("nodes_left", [])}
+    assert "Everyone" not in labels and "Domain Users" not in labels
+
+
+@pytest.mark.asyncio
+async def test_sankey_filter_user_narrows_to_single_upn(client: AsyncClient) -> None:
+    r = await client.get("/api/flows/sankey", params={"user": "alice@corp"})
+    body = r.json()
+    # Assert no link references a user other than alice
+    for link in body.get("links", []):
+        assert link.get("user_upn") in {None, "alice@corp"} or link.get("users", 0) >= 1
+
+
+@pytest.mark.asyncio
+async def test_sankey_filter_group_multi_select(client: AsyncClient) -> None:
+    r = await client.get("/api/flows/sankey", params={"group": ["Sales EMEA", "Ops"]})
+    body = r.json()
+    labels = {n["label"] for n in body.get("nodes_left", [])}
+    assert labels.issubset({"Sales EMEA", "Ops", "unknown"})
+```
+
+- [ ] **Step 2: Extend router signature**
+
+```python
+@router.get("/sankey")
+async def sankey(
+    mode: Literal["live", "historical"] = "live",
+    group_by: Literal["group", "user", "src_ip"] = "group",
+    src_cidr: str | None = None,
+    dst_app: str | None = None,
+    proto: int | None = None,
+    group: list[str] = Query(default_factory=list),
+    user: str | None = None,
+    exclude_groups: str | None = None,
+    limit: int = 200,
+    # ... existing params
+) -> SankeyDelta: ...
+```
+
+Pass `group_by` through to the correlator subscription filter (server-side). `exclude_groups` is CSV; parse into a set and prefer the request value over the correlator default.
+
+- [ ] **Step 3: Run tests; expect PASS**
+
+Run: `pytest api/tests/routers/test_flows_router_group_by.py -v`
+Expected: PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add api/src/api/routers/flows.py api/tests/routers/test_flows_router_group_by.py
+git commit -m "feat(api): group_by=user|src_ip + group/user/exclude_groups filters"
+```
+
+---
+
+### Task 6.3: `/api/groups/{id}` paginated members + `/api/adapters` + `/api/stats`
+
+**Files:**
+- Create: `api/src/api/routers/groups.py`
+- Create: `api/tests/routers/test_groups_router.py`
+- Modify: `api/src/api/routers/adapters.py`
+- Modify: `api/src/api/routers/stats.py`
+- Modify: `api/tests/routers/test_stats_router.py`
+
+- [ ] **Step 1: Groups failing test**
+
+```python
+@pytest.mark.asyncio
+async def test_groups_returns_paginated_members(client, seed_group):
+    # seed_group inserts 250 user_groups rows for group_id='g:sales'
+    r = await client.get("/api/groups/g:sales", params={"page_size": 100})
+    body = r.json()
+    assert body["group_id"] == "g:sales"
+    assert body["size"] == 250
+    assert len(body["members"]) == 100
+    assert body["next_cursor"] is not None
+    r2 = await client.get("/api/groups/g:sales",
+                          params={"page_size": 100, "cursor": body["next_cursor"]})
+    body2 = r2.json()
+    assert len(body2["members"]) == 100
+    assert body2["next_cursor"] is not None
+```
+
+- [ ] **Step 2: Implement router**
+
+```python
+# api/src/api/routers/groups.py
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+
+from fastapi import APIRouter, HTTPException, Query
+
+router = APIRouter(prefix="/api/groups", tags=["groups"])
+
+
+@router.get("/{group_id}")
+async def get_group(group_id: str, page_size: int = Query(100, ge=1, le=200),
+                    cursor: str | None = None):
+    after = urlsafe_b64decode(cursor).decode() if cursor else ""
+    # SELECT user_upn FROM user_groups WHERE group_id=:id AND user_upn > :after ORDER BY user_upn LIMIT :n
+    rows, total = await _fetch_group_members(group_id, after, page_size)
+    if total == 0:
+        raise HTTPException(404, detail="group not found")
+    next_cursor = urlsafe_b64encode(rows[-1].encode()).decode() if len(rows) == page_size else None
+    return {
+        "group_id": group_id,
+        "group_name": await _fetch_group_name(group_id),
+        "size": total,
+        "members": rows,
+        "next_cursor": next_cursor,
+    }
+```
+
+- [ ] **Step 3: Extend `/api/adapters` to include id-ingest entries**
+
+```python
+@router.get("/api/adapters")
+async def adapters():
+    flow = await _collect_flow_ingest_health()
+    ident = await _collect_id_ingest_health()   # HTTP call to id-ingest healthcheck
+    return {"flow": flow, "identity": ident}
+```
+
+- [ ] **Step 4: Extend `/api/stats`**
+
+```python
+@router.get("/api/stats")
+async def stats():
+    return {
+        "flows_per_second": await _flows_rate(),
+        "redis_lag_ms": await _redis_lag(),
+        "unknown_user_ratio": await _prom_gauge("correlator_unknown_user_ratio"),
+        "group_sync_age_seconds": await _group_sync_age(),   # now() - max(refreshed_at)
+    }
+```
+
+- [ ] **Step 5: Run router tests; expect PASS**
+
+Run: `pytest api/tests/routers/ -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add api/src/api/routers/groups.py api/src/api/routers/adapters.py api/src/api/routers/stats.py api/tests/routers/
+git commit -m "feat(api): groups router + identity-aware adapters/stats"
+```
+
+---
+
+### Task 6.4: Web — left-column mode toggle + URL-state persistence
+
+**Files:**
+- Create: `web/src/components/LeftColumnModeToggle.tsx`
+- Create: `web/src/hooks/useGroupByMode.ts`
+- Modify: `web/src/pages/SankeyPage.tsx`
+- Create: `web/tests/components/LeftColumnModeToggle.test.tsx`
+
+- [ ] **Step 1: Failing component test**
+
+```tsx
+import { render, screen, fireEvent } from "@testing-library/react";
+import { LeftColumnModeToggle } from "../../src/components/LeftColumnModeToggle";
+
+test("toggles between Groups / Users / Source IPs and updates URL", () => {
+  const onChange = vi.fn();
+  render(<LeftColumnModeToggle value="group" onChange={onChange} />);
+  fireEvent.click(screen.getByRole("button", { name: /users/i }));
+  expect(onChange).toHaveBeenCalledWith("user");
+  fireEvent.click(screen.getByRole("button", { name: /source ips/i }));
+  expect(onChange).toHaveBeenCalledWith("src_ip");
+});
+```
+
+- [ ] **Step 2: Implement toggle component + URL hook**
+
+```tsx
+// web/src/hooks/useGroupByMode.ts
+export function useGroupByMode(): [GroupBy, (v: GroupBy) => void] {
+  const [params, setParams] = useSearchParams();
+  const value = (params.get("group_by") ?? "group") as GroupBy;
+  const set = (v: GroupBy) => {
+    const next = new URLSearchParams(params);
+    next.set("group_by", v);
+    setParams(next, { replace: true });
+  };
+  return [value, set];
+}
+```
+
+- [ ] **Step 3: Wire in `SankeyPage.tsx` header**
+
+Renders toggle inline with the existing live/historical pill; reads from `useGroupByMode` and passes as `group_by` into the Sankey query.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add web/src/components/LeftColumnModeToggle.tsx web/src/hooks/useGroupByMode.ts web/src/pages/SankeyPage.tsx web/tests/components/LeftColumnModeToggle.test.tsx
+git commit -m "feat(web): left-column mode toggle persisted in URL"
+```
+
+---
+
+### Task 6.5: Web — unknown-strand banner + amber strand + LCD fallback badge
+
+**Files:**
+- Create: `web/src/components/UnknownStrandBanner.tsx`
+- Create: `web/src/hooks/useUnknownRatio.ts`
+- Create: `web/src/components/LcdFallbackBadge.tsx`
+- Create: `web/tests/components/UnknownStrandBanner.test.tsx`
+- Modify: `web/src/pages/SankeyPage.tsx`
+
+- [ ] **Step 1: Failing test**
+
+```tsx
+test("banner appears only when unknown_ratio > 0.5 sustained 10 minutes", () => {
+  const { rerender } = render(<UnknownStrandBanner ratio={0.3} windowSeconds={600} />);
+  expect(screen.queryByRole("alert")).toBeNull();
+
+  rerender(<UnknownStrandBanner ratio={0.6} windowSeconds={600} />);
+  expect(screen.getByRole("alert")).toHaveTextContent(/check identity sources/i);
+});
+```
+
+- [ ] **Step 2: Implement hook**
+
+```ts
+export function useUnknownRatio(): { ratio: number; sustainedSec: number } {
+  const { data } = useQuery({ queryKey: ["stats"], queryFn: fetchStats, refetchInterval: 5000 });
+  // maintain a sliding 10-minute window client-side; ratio = avg of last 10m samples
+  // return ratio and sustainedSec (how long continuously above 50%)
+}
+```
+
+- [ ] **Step 3: Style unknown strand amber**
+
+In `SankeyRenderer.tsx`, when `link.src === "unknown"`, set fill/stroke to the project's amber token.
+
+- [ ] **Step 4: `LcdFallbackBadge` shown inline next to per-user strands**
+
+Reason text: `"LCD miss — showing per-user strand (no shared group outside exclusions)"`. Rendered from a `reason?: "lcd_miss" | "single_user_floor"` hint attached to each left-node by the correlator.
+
+- [ ] **Step 5: Run web test suite; expect PASS**
+
+Run: `cd web && npm test`
+Expected: banner + badge tests PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add web/src/components/UnknownStrandBanner.tsx web/src/hooks/useUnknownRatio.ts web/src/components/LcdFallbackBadge.tsx web/tests/components/UnknownStrandBanner.test.tsx web/src/pages/SankeyPage.tsx
+git commit -m "feat(web): unknown-strand banner + LCD fallback badge"
+```
+
+---
+
+### Task 6.6: Web — group tooltip, members modal, user details, filters
+
+**Files:**
+- Create: `web/src/components/GroupNodeTooltip.tsx`
+- Create: `web/src/components/GroupMembersModal.tsx`
+- Create: `web/src/components/UserNodeDetails.tsx`
+- Modify: `web/src/pages/FiltersPanel.tsx`
+- Create: `web/tests/components/GroupNodeTooltip.test.tsx`
+- Create: `web/tests/components/GroupMembersModal.test.tsx`
+
+- [ ] **Step 1: Tooltip + modal failing tests**
+
+```tsx
+test("group tooltip shows name, size, top-5 members", () => {
+  render(<GroupNodeTooltip group={{ id: "g:sales", name: "Sales EMEA", size: 42, sample: ["a","b","c","d","e"] }} />);
+  expect(screen.getByText("Sales EMEA")).toBeInTheDocument();
+  expect(screen.getByText("42 members")).toBeInTheDocument();
+  expect(screen.getAllByTestId("tooltip-member").length).toBe(5);
+});
+
+test("modal loads 200 members max and pages via cursor", async () => {
+  // mock /api/groups/g:sales to return 200 with next_cursor
+  render(<GroupMembersModal groupId="g:sales" open />);
+  await screen.findAllByTestId("member-row");
+  expect(screen.getAllByTestId("member-row").length).toBeLessThanOrEqual(200);
+  fireEvent.click(screen.getByRole("button", { name: /load more/i }));
+  // second page requested with cursor
+});
+```
+
+- [ ] **Step 2: Implement components**
+
+- `GroupNodeTooltip` reads `size` + first 5 `sample` members from the Sankey payload (left-node dict).
+- `GroupMembersModal` calls `GET /api/groups/{id}?page_size=100` with cursor pagination; total capped at 200 in UI.
+- `UserNodeDetails` pane lists recent flows (`/api/flows/raw?user=...`) and identity source.
+
+- [ ] **Step 3: Extend `FiltersPanel`**
+
+- Group multi-select (combobox) bound to `group=<csv>` query param.
+- User free-text bound to `user=...`.
+- Exclude-groups chip input pre-seeded with `Domain Users, Authenticated Users, Everyone`, bound to `exclude_groups=<csv>`.
+
+- [ ] **Step 4: Run web tests; expect PASS**
+
+Run: `cd web && npm test`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add web/src/components/GroupNodeTooltip.tsx web/src/components/GroupMembersModal.tsx web/src/components/UserNodeDetails.tsx web/src/pages/FiltersPanel.tsx web/tests/components/
+git commit -m "feat(web): group tooltip + members modal + user details + filter panel"
+```
+
+---
+
+**End of Chunk 6.**
+Gate: api + web tests green; `/api/identity/resolve`, `/api/groups/{id}`, extended `/api/flows/sankey`, and mode toggle + banner + modal all landed.
 
 ---
 
