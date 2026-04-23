@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import Depends
 from redis.asyncio import Redis
@@ -20,10 +21,10 @@ def redis_client() -> Redis:
 
 
 # TODO(P4): replace stub with OIDC JWT + role verifier.
-async def current_user() -> dict:
+async def current_user() -> dict[str, Any]:
     return {"upn": "anonymous@local", "role": "admin"}
 
 
-def require_editor(user: dict = Depends(current_user)) -> dict:
+def require_editor(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     # TODO(P4): enforce role check — currently returns user regardless.
     return user

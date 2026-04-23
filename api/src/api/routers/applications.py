@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,7 +34,7 @@ async def list_apps(
 @router.post("", response_model=Application, status_code=status.HTTP_201_CREATED)
 async def create_app(
     body: ApplicationIn,
-    user: dict = Depends(require_editor),  # TODO(P4): require role=editor
+    user: dict[str, Any] = Depends(require_editor),  # TODO(P4): require role=editor
     session: AsyncSession = Depends(db_session),
 ) -> Application:
     res = await session.execute(
@@ -65,7 +67,7 @@ async def create_app(
 async def update_app(
     app_id: int,
     body: ApplicationIn,
-    user: dict = Depends(require_editor),  # TODO(P4): require role=editor
+    user: dict[str, Any] = Depends(require_editor),  # TODO(P4): require role=editor
     session: AsyncSession = Depends(db_session),
 ) -> Application:
     before_res = await session.execute(
@@ -115,7 +117,7 @@ async def update_app(
 @router.delete("/{app_id}", status_code=204, response_model=None, response_class=Response)
 async def delete_app(
     app_id: int,
-    user: dict = Depends(require_editor),  # TODO(P4): require role=editor
+    user: dict[str, Any] = Depends(require_editor),  # TODO(P4): require role=editor
     session: AsyncSession = Depends(db_session),
 ) -> None:
     # Write audit BEFORE delete because of ON DELETE CASCADE on application_audit.

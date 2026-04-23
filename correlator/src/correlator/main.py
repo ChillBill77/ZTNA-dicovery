@@ -5,6 +5,7 @@ import contextlib
 import json
 import signal
 from datetime import datetime
+from typing import Any
 
 import asyncpg
 import uvloop
@@ -26,7 +27,7 @@ from correlator.settings import CorrelatorSettings
 async def _read_xstream_into(
     redis: Redis,
     stream: str,
-    out: asyncio.Queue,
+    out: asyncio.Queue[dict[str, Any]],
     group: str = "correlator",
 ) -> None:
     # Ensure group exists
@@ -55,8 +56,8 @@ async def _read_xstream_into(
 
 
 async def _label_stage(
-    inp: asyncio.Queue,
-    out: asyncio.Queue,
+    inp: asyncio.Queue[WindowedFlow],
+    out: asyncio.Queue[LabelledFlow],
     resolver: AppResolver,
 ) -> None:
     while True:
@@ -128,7 +129,7 @@ def _as_asyncpg_dsn(url: str) -> str:
     )
 
 
-async def _demux(src: asyncio.Queue, *dsts: asyncio.Queue) -> None:
+async def _demux(src: asyncio.Queue[LabelledFlow], *dsts: asyncio.Queue[LabelledFlow]) -> None:
     while True:
         item = await src.get()
         for d in dsts:
@@ -149,11 +150,11 @@ async def _run(settings: CorrelatorSettings) -> None:
     resolver = AppResolver(redis=redis)
     await _load_app_resolver(resolver, pool)
 
-    raw_q: asyncio.Queue = asyncio.Queue(maxsize=settings.queue_max)
-    windowed_q: asyncio.Queue = asyncio.Queue(maxsize=settings.queue_max)
-    labelled_q_writer: asyncio.Queue = asyncio.Queue(maxsize=settings.queue_max)
-    labelled_q_sankey: asyncio.Queue = asyncio.Queue(maxsize=settings.queue_max)
-    intermediate_q: asyncio.Queue = asyncio.Queue(maxsize=settings.queue_max)
+    raw_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=settings.queue_max)
+    windowed_q: asyncio.Queue[WindowedFlow] = asyncio.Queue(maxsize=settings.queue_max)
+    labelled_q_writer: asyncio.Queue[LabelledFlow] = asyncio.Queue(maxsize=settings.queue_max)
+    labelled_q_sankey: asyncio.Queue[LabelledFlow] = asyncio.Queue(maxsize=settings.queue_max)
+    intermediate_q: asyncio.Queue[LabelledFlow] = asyncio.Queue(maxsize=settings.queue_max)
 
     windower = FlowWindower(inp=raw_q, out=windowed_q, window_s=settings.window_s)
     writer = Writer(

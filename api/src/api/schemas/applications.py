@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -31,5 +31,5 @@ class AuditEntry(BaseModel):
     changed_at: datetime
     changed_by: str
     op: Literal["create", "update", "delete"]
-    before: dict | None
-    after: dict | None
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
