@@ -16,6 +16,13 @@ def test_discover_adapters_returns_subclass_list() -> None:
         assert cls is not IdentityAdapter
 
 
+def test_discover_adapters_finds_all_day1_adapters() -> None:
+    """All four day-1 identity adapters must auto-register via module scan."""
+
+    names = {cls.name for cls in discover_adapters()}
+    assert names == {"ad_4624", "entra_signin", "cisco_ise", "aruba_clearpass"}
+
+
 @pytest.mark.asyncio
 async def test_run_once_returns_after_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """Idle shutdown path returns True after the timeout elapses."""

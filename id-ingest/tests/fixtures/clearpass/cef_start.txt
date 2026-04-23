@@ -1,0 +1,1 @@
+<14>2026-04-22T12:15:00Z cppm01 CEF:0|Aruba Networks|ClearPass|6.11|2001|Accounting-Start|1|src=10.0.20.12 suser=bob@corp.example smac=11:22:33:44:55:66 cs1Label=Service cs1=CORP-WIRED cs2Label=Session-Timeout cs2=7200 externalId=CP-SESSION-987
