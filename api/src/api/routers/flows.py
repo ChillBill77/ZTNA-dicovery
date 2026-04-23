@@ -27,6 +27,9 @@ def _filter_links(
     category: str | None,  # not implemented server-side in P2 — SaaS category match deferred
     proto: int | None,
     deny_only: bool,
+    group_filter: set[str] | None = None,
+    user_filter: str | None = None,
+    exclude_groups: set[str] | None = None,
 ) -> dict[str, Any]:
     links = delta["links"]
     if src_cidr:
@@ -46,6 +49,15 @@ def _filter_links(
     if dst_app:
         target = f"app:{dst_app}"
         links = [lk for lk in links if lk["dst"] == target]
+    # Identity-aware filters (P3). All operate on the left-node label that the
+    # correlator already published — no DB roundtrip here.
+    if group_filter:
+        # Keep only links whose src label is in the allowed set (or "unknown").
+        links = [lk for lk in links if lk["src"] in group_filter or lk["src"] == "unknown"]
+    if user_filter:
+        links = [lk for lk in links if lk["src"] == user_filter or lk["src"] == "unknown"]
+    if exclude_groups:
+        links = [lk for lk in links if lk["src"] not in exclude_groups]
     # proto / deny_only filtering is a noop in P2 (not carried on aggregated delta);
     # TODO(P3/P4): enrich SankeyDelta with per-link proto + action rollups.
     return {**delta, "links": links}
@@ -67,7 +79,10 @@ async def sankey(
     category: str | None = None,
     proto: int | None = None,
     deny_only: bool = False,
-    group_by: Literal["src_ip", "app"] = "src_ip",
+    group_by: Literal["src_ip", "app", "group", "user"] = "src_ip",
+    group: list[str] = Query(default_factory=list),
+    user: str | None = None,
+    exclude_groups: str | None = None,
     from_ts: datetime | None = Query(default=None, alias="from"),
     to_ts: datetime | None = Query(default=None, alias="to"),
     session: AsyncSession = Depends(db_session),
@@ -126,6 +141,12 @@ async def sankey(
             "dropped_count": 0,
         }
 
+    exclude_set = (
+        {g.strip() for g in exclude_groups.split(",") if g.strip()}
+        if exclude_groups
+        else None
+    )
+    group_set = {g for g in group if g} or None
     filtered = _filter_links(
         base,
         src_cidr=src_cidr,
@@ -133,6 +154,9 @@ async def sankey(
         category=category,
         proto=proto,
         deny_only=deny_only,
+        group_filter=group_set,
+        user_filter=user,
+        exclude_groups=exclude_set,
     )
     truncated = _truncate(filtered, limit)
     # Ensure node lists include only referenced ids
