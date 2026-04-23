@@ -16,10 +16,14 @@ jobs:
           cache: pip
       - name: Install tools
         run: pip install ruff mypy
+      - name: Install common (shared package — must come first)
+        run: pip install -e 'common/[test]'
       - name: Install api with test extras (pulls pytest + pytest-asyncio + httpx)
         run: pip install -e 'api/[test]'
       - name: Install flow-ingest with test extras
         run: pip install -e 'flow-ingest/[test]'
+      - name: Install id-ingest with test extras
+        run: pip install -e 'id-ingest/[test]'
       - name: Install resolver with test extras
         run: pip install -e 'resolver/[test]'
       - name: Install correlator with test extras
@@ -31,9 +35,9 @@ jobs:
       - name: Ruff format
         run: ruff format --check .
       - name: Mypy
-        run: mypy api/src migrate/alembic flow-ingest/src resolver/src correlator/src
+        run: mypy api/src migrate/alembic common/src flow-ingest/src id-ingest/src resolver/src correlator/src
       - name: Pytest (unit)
-        run: pytest api/tests flow-ingest/tests resolver/tests correlator/tests -v
+        run: pytest common/tests api/tests flow-ingest/tests id-ingest/tests resolver/tests correlator/tests -v
 
   no-claude-attribution:
     # Per project policy: commit messages on this repo must not contain Claude

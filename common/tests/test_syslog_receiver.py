@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from flow_ingest.syslog_receiver import SyslogReceiver
+from ztna_common.syslog_receiver import SyslogReceiver
 
 
 @pytest.mark.asyncio
