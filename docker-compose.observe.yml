@@ -1,0 +1,46 @@
+# Observability overlay — Prometheus scrapes + Grafana dashboard.
+#
+# Layered with:
+#   docker compose -f docker-compose.yml -f docker-compose.observe.yml \
+#       --profile observe up -d
+#
+# Grafana is exposed at https://<APP_DOMAIN>/grafana behind Traefik, protected
+# by the same OIDC forwardAuth middleware used for the Traefik dashboard.
+
+volumes:
+  grafana-data:
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: [observe]
+    restart: unless-stopped
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    networks: [backend]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: [observe]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "https://${APP_DOMAIN}/grafana"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks: [backend]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.grafana.rule=Host(`${APP_DOMAIN}`) && PathPrefix(`/grafana`)
+      - traefik.http.routers.grafana.entrypoints=websecure
+      - traefik.http.routers.grafana.tls=true
+      - traefik.http.routers.grafana.middlewares=oidc-verify@file,secure-headers@file
+      - traefik.http.services.grafana.loadbalancer.server.port=3000

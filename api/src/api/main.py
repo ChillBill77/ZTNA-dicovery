@@ -10,6 +10,8 @@ from fastapi.staticfiles import StaticFiles
 
 from api.auth.router import router as auth_router
 from api.db import init_engine, ping_db
+from api.logging_config import configure_logging
+from api.metrics import MetricsMiddleware, metrics_endpoint
 from api.middleware_csrf import CsrfMiddleware
 from api.redis import init_redis, ping_redis
 from api.routers import (
@@ -29,6 +31,7 @@ from api.settings import Settings
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
+    configure_logging(settings.log_level)
     init_engine(settings)
     init_redis(settings)
     await ws_startup()
@@ -58,7 +61,10 @@ def build_app() -> FastAPI:
             },
         )
 
+    app.add_middleware(MetricsMiddleware)
     app.add_middleware(CsrfMiddleware)
+
+    app.get("/metrics", include_in_schema=False)(metrics_endpoint)
 
     app.include_router(auth_router)
     app.include_router(flows.router)
