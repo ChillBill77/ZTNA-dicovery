@@ -75,6 +75,38 @@ def build_app() -> FastAPI:
     app.include_router(groups.router)
     app.include_router(ws.router)
 
+    # Test-only routes — enabled only when MOCK_SESSION=1. CI E2E uses these
+    # to mint session cookies + publish synthetic SankeyDeltas without driving
+    # the real OIDC flow. Never enable in production.
+    settings = Settings()
+    if settings.mock_session_enabled:
+        import json as _json
+        import secrets as _secrets
+        import time as _time
+        from typing import Any as _Any
+
+        from api.auth.session import SessionCodec, SessionData
+        from api.redis import get_redis
+
+        @app.post("/api/test/login-as", include_in_schema=False)
+        async def _test_login_as(payload: dict[str, _Any]) -> dict[str, str]:
+            csrf = _secrets.token_urlsafe(8)
+            codec = SessionCodec(settings.session_secret)
+            token = codec.encode(
+                SessionData(
+                    user_upn=payload["upn"],
+                    roles=set(payload["roles"]),
+                    csrf=csrf,
+                    exp=int(_time.time()) + 3600,
+                )
+            )
+            return {"session": token, "csrf_token": csrf}
+
+        @app.post("/api/test/seed", include_in_schema=False)
+        async def _test_seed(payload: dict[str, _Any]) -> dict[str, bool]:
+            await get_redis().publish("sankey.live", _json.dumps(payload))
+            return {"ok": True}
+
     # When the web SPA has been bundled into /app/web-dist, serve it at root.
     # In dev the separate Vite server replaces this behavior.
     web_dist = Path("/app/web-dist")

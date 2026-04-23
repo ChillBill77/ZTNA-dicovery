@@ -1,0 +1,67 @@
+name: E2E
+
+on:
+  pull_request:
+    paths:
+      - "web/**"
+      - "api/**"
+      - "e2e/**"
+      - "docker-compose*.yml"
+  push:
+    branches: [main]
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright deps
+        working-directory: e2e
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Seed .env
+        run: |
+          cp .env.example .env
+          sed -i 's|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=e2e|' .env
+          sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://ztna:e2e@postgres:5432/ztna|' .env
+          sed -i 's|^APP_DOMAIN=.*|APP_DOMAIN=localhost|' .env
+          sed -i 's|^ACME_EMAIL=.*|ACME_EMAIL=|' .env
+          sed -i 's|^SESSION_SECRET=.*|SESSION_SECRET=e2e-secret-e2e-secret-e2e-secret-32|' .env
+          echo "MOCK_SESSION=1" >> .env
+
+      - name: Boot stack
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+
+      - name: Wait for api /health/ready
+        run: |
+          for i in $(seq 1 60); do
+            if docker compose exec -T api python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready').status==200 else 1)"; then
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Run Playwright
+        working-directory: e2e
+        env:
+          APP_URL: https://localhost
+        run: npm run test:ci
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+
+      - name: Teardown
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v --remove-orphans
