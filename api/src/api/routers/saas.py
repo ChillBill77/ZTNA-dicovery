@@ -6,10 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth.roles import require_role
 from api.dependencies import db_session, require_editor
 from api.schemas.saas import SaasEntry, SaasIn
 
-router = APIRouter(prefix="/api/saas", tags=["saas"])
+router = APIRouter(
+    prefix="/api/saas",
+    tags=["saas"],
+    dependencies=[require_role("viewer")],
+)
 
 
 @router.get("", response_model=list[SaasEntry])

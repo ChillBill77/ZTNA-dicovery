@@ -5,11 +5,16 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth.roles import require_role
 from api.dependencies import db_session
 from api.schemas.identity import IdentityResolution
 from api.services.identity_service import IdentityService
 
-router = APIRouter(prefix="/api/identity", tags=["identity"])
+router = APIRouter(
+    prefix="/api/identity",
+    tags=["identity"],
+    dependencies=[require_role("viewer")],
+)
 
 
 def _identity_service(

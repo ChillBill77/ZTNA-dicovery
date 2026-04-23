@@ -8,7 +8,9 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.auth.router import router as auth_router
 from api.db import init_engine, ping_db
+from api.middleware_csrf import CsrfMiddleware
 from api.redis import init_redis, ping_redis
 from api.routers import (
     adapters,
@@ -56,6 +58,9 @@ def build_app() -> FastAPI:
             },
         )
 
+    app.add_middleware(CsrfMiddleware)
+
+    app.include_router(auth_router)
     app.include_router(flows.router)
     app.include_router(applications.router)
     app.include_router(saas.router)

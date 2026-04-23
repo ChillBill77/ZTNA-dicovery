@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 
 
 @dataclass(frozen=True)
@@ -38,15 +38,17 @@ def roles_from_groups(groups: list[str], mapping: RoleMap) -> set[str]:
     return set()
 
 
-async def _current_user_proxy() -> dict[str, Any]:
-    """Late-bound resolver — avoids circular import at module load.
+async def _current_user_proxy(request: Request) -> dict[str, Any]:
+    """Late-bound resolver for :func:`require_role`.
 
-    Replaced by tests via ``app.dependency_overrides[current_user] = ...``.
-    The real implementation lives in :mod:`api.auth.router`.
+    Avoids circular import at module load by resolving the real resolver on
+    call. Tests override this via
+    ``app.dependency_overrides[_current_user_proxy] = ...``.
     """
+
     from api.auth.router import current_user
 
-    return await current_user()
+    return await current_user(request)
 
 
 def require_role(role: str) -> Any:
