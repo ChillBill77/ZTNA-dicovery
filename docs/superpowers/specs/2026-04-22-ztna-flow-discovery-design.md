@@ -9,6 +9,16 @@
 
 ## 1. Problem & Goals
 
+### Situation–Complication–Question
+
+**Situation.** Organizations are adopting Zero Trust Network Access (ZTNA) frameworks, but their transition depends on first mapping the existing network reality: which users and user groups access which applications. Today, firewalls log these flows and SIEMs ingest them, but the data remains fragmented in raw logs without identity context or group-level abstraction.
+
+**Complication.** The visibility gap spans across the entire organization. Network administrators see flows but lack user identity context — they cannot answer "who is accessing this?" without manual correlation. Product owners and application teams are often unaware who accesses their applications at all, creating gaps in ownership and responsibility. Current firewall consoles and SIEM dashboards surface raw transaction logs but cannot bridge these silos. Legacy applications compound the problem: without documented ownership, it is unclear even who should be designing policy for them. Large application segments resist granular partitioning because there is no clear data showing which user groups actually need access to which sub-components. This fragmentation — network view without identity, identity systems without application context, and applications without known users — blocks the unified, identity-aware, group-level view required to design defensible Zero Trust policies.
+
+**Question.** How can the organization establish a live, group-aware baseline of network flows enriched with identity data, so policy designers can see at a glance which users and groups access which applications — and move from guesswork to evidence-based zero-trust policy design?
+
+### Overview
+
 Organizations rolling out Zero Trust Network Access (ZTNA) need to first **see** what exists: which endpoints (source computers / users) communicate with which applications (destination servers and ports). Current firewall consoles and SIEM dashboards surface raw logs but don't give a live, identity-aware, group-level view suitable for policy design discussions.
 
 This project delivers a self-hosted web application that visualizes network flows as a **near-realtime Sankey diagram**, enriched with user and group identity from Entra ID / on-prem Active Directory / NAC systems, so teams can see at a glance "which groups of users access which applications".
