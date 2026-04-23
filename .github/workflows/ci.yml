@@ -119,7 +119,15 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Seed .env for compose (env_file reference)
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          # Overwrite values that must match the step env (postgres uses env_file
+          # on every service; step env only wins for services with an explicit
+          # `environment:` override). Keeping .env consistent avoids auth drift.
+          sed -i 's|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=integration|' .env
+          sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://ztna:integration@postgres:5432/ztna|' .env
+          sed -i 's|^APP_DOMAIN=.*|APP_DOMAIN=localhost|' .env
+          sed -i 's|^ACME_EMAIL=.*|ACME_EMAIL=|' .env
       - name: Build and start stack
         env:
           APP_DOMAIN: localhost
@@ -155,10 +163,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: e2e/package-lock.json
+          # No cache: e2e/package-lock.json is not committed; npm install in the
+          # install step generates it fresh. Caching against a missing file
+          # fails the setup-node step in strict mode.
       - name: Seed .env for compose (env_file reference)
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          # Overwrite values that must match the step env (postgres uses env_file
+          # on every service; step env only wins for services with an explicit
+          # `environment:` override). Keeping .env consistent avoids auth drift.
+          sed -i 's|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=integration|' .env
+          sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://ztna:integration@postgres:5432/ztna|' .env
+          sed -i 's|^APP_DOMAIN=.*|APP_DOMAIN=localhost|' .env
+          sed -i 's|^ACME_EMAIL=.*|ACME_EMAIL=|' .env
       - name: Build and start stack
         env:
           APP_DOMAIN: localhost
