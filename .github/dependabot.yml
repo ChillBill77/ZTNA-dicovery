@@ -1,0 +1,52 @@
+version: 2
+updates:
+  # --- Python services ---
+  - package-ecosystem: pip
+    directory: "/api"
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: "/flow-ingest"
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: "/id-ingest"
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: "/correlator"
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: "/migrate"
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: "/loadtest"
+    schedule: { interval: weekly }
+
+  # --- JS ---
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule: { interval: weekly }
+  - package-ecosystem: npm
+    directory: "/e2e"
+    schedule: { interval: weekly }
+
+  # --- CI + Docker base images ---
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: "/api"
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: "/flow-ingest"
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: "/id-ingest"
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: "/correlator"
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: "/migrate"
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: "/web"
+    schedule: { interval: weekly }

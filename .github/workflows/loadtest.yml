@@ -1,0 +1,62 @@
+name: Load Test (weekly)
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # Monday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  sustained:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seed .env from .env.example
+        run: |
+          cp .env.example .env
+          sed -i 's|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=loadtest|' .env
+          sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://ztna:loadtest@postgres:5432/ztna|' .env
+          sed -i 's|^APP_DOMAIN=.*|APP_DOMAIN=localhost|' .env
+          sed -i 's|^ACME_EMAIL=.*|ACME_EMAIL=|' .env
+          sed -i 's|^SESSION_SECRET=.*|SESSION_SECRET=loadtest-secret-loadtest-secret-32|' .env
+
+      - name: Build and start stack with observability
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.observe.yml \
+            --profile observe up -d --build
+
+      - name: Wait for api /health/ready
+        run: |
+          for i in $(seq 1 60); do
+            if docker compose exec -T api python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready').status==200 else 1)"; then
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Run sustained load
+        env:
+          LOAD_SCENARIO: sustained
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.observe.yml \
+            -f docker-compose.loadtest.yml \
+            --profile loadtest --profile observe up \
+            --exit-code-from locust-master locust-master
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+
+      - name: Teardown
+        if: always()
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.observe.yml \
+            -f docker-compose.loadtest.yml \
+            down -v --remove-orphans
