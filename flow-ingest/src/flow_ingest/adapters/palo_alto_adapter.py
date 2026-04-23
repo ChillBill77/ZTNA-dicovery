@@ -10,8 +10,6 @@ from typing import ClassVar
 from loguru import logger
 
 from flow_ingest.adapters.base import FlowAdapter, FlowEvent
-from flow_ingest.publisher import RedisFlowPublisher
-from flow_ingest.syslog_receiver import SyslogReceiver
 
 _PROTO_BY_NAME: dict[str, int] = {"tcp": 6, "udp": 17, "icmp": 1}
 
@@ -37,9 +35,6 @@ def _proto(val: str) -> int:
 
 @dataclass
 class PaloAltoAdapter(FlowAdapter):
-    receiver: SyslogReceiver
-    publisher: RedisFlowPublisher
-    peer_allowlist: set[str] | None = None  # source-IP demux
     name: ClassVar[str] = "palo_alto"
 
     @staticmethod

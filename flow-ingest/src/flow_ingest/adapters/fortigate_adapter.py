@@ -10,8 +10,6 @@ from typing import ClassVar
 from loguru import logger
 
 from flow_ingest.adapters.base import FlowAdapter, FlowEvent
-from flow_ingest.publisher import RedisFlowPublisher
-from flow_ingest.syslog_receiver import SyslogReceiver
 
 _PRI_PREFIX = re.compile(r"^<\d+>")
 
@@ -30,9 +28,6 @@ def _kv(line: str) -> dict[str, str]:
 
 @dataclass
 class FortiGateAdapter(FlowAdapter):
-    receiver: SyslogReceiver
-    publisher: RedisFlowPublisher
-    peer_allowlist: set[str] | None = None
     name: ClassVar[str] = "fortigate"
 
     @staticmethod
