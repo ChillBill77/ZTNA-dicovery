@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 import asyncpg
 from loguru import logger
@@ -119,7 +119,10 @@ class AppResolver:
         ptr = await self.redis.get(f"dns:ptr:{dst_ip}")
         if ptr is None:
             # Unseen IP — schedule for the resolver worker.
-            await self.redis.rpush("dns:unresolved", dst_ip)
+            # redis-py types rpush as Union[Awaitable[int], int] because the
+            # sync and async clients share a signature; on the async client it
+            # always returns an Awaitable.
+            await cast(Awaitable[int], self.redis.rpush("dns:unresolved", dst_ip))
         elif ptr:
             saas_id_str = await self.redis.get(f"dns:saas:{dst_ip}")
             if saas_id_str is not None:

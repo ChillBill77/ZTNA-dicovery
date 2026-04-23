@@ -5,6 +5,7 @@ import ipaddress
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from loguru import logger
 from redis.asyncio import Redis
@@ -13,9 +14,9 @@ from redis.asyncio import Redis
 @dataclass
 class ClientState:
     send: Callable[[str], Awaitable[None]]
-    filters: dict = field(default_factory=dict)  # src_cidr, dst_app, proto, deny_only
+    filters: dict[str, Any] = field(default_factory=dict)  # src_cidr, dst_app, proto, deny_only
 
-    def matches(self, link: dict) -> bool:
+    def matches(self, link: dict[str, Any]) -> bool:
         src_cidr = self.filters.get("src_cidr")
         if src_cidr:
             try:
@@ -33,7 +34,7 @@ class SankeyFanout:
         self.redis = redis
         self.channel = channel
         self._clients: list[ClientState] = []
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
 
     def add_client(self, c: ClientState) -> None:
         self._clients.append(c)
@@ -61,7 +62,7 @@ class SankeyFanout:
                     continue
                 await self._dispatch(payload)
 
-    async def _dispatch(self, delta: dict) -> None:
+    async def _dispatch(self, delta: dict[str, Any]) -> None:
         for c in list(self._clients):
             filtered = {**delta, "links": [lk for lk in delta["links"] if c.matches(lk)]}
             try:

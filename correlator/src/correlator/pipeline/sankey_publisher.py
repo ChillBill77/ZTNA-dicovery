@@ -4,6 +4,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from loguru import logger
 from redis.asyncio import Redis
@@ -29,7 +30,7 @@ class LabelledFlow:
 
 @dataclass
 class SankeyPublisher:
-    inp: asyncio.Queue
+    inp: asyncio.Queue[LabelledFlow]
     redis: Redis
     channel: str = "sankey.live"
 
@@ -49,9 +50,9 @@ class SankeyPublisher:
     async def _publish(self, bucket: datetime, flows: list[LabelledFlow]) -> None:
         if not flows:
             return
-        links: dict[tuple[str, str], dict] = {}
-        nodes_left: dict[str, dict] = {}
-        nodes_right: dict[str, dict] = {}
+        links: dict[tuple[str, str], dict[str, Any]] = {}
+        nodes_left: dict[str, dict[str, Any]] = {}
+        nodes_right: dict[str, dict[str, Any]] = {}
         lossy = False
         dropped = 0
         for f in flows:

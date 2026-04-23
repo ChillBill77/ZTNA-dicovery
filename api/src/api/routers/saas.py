@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +26,7 @@ async def list_saas(session: AsyncSession = Depends(db_session)) -> list[SaasEnt
 @router.post("", response_model=SaasEntry, status_code=status.HTTP_201_CREATED)
 async def create_saas(
     body: SaasIn,
-    _user: dict = Depends(require_editor),  # TODO(P4): require role=editor
+    _user: dict[str, Any] = Depends(require_editor),  # TODO(P4): require role=editor
     session: AsyncSession = Depends(db_session),
 ) -> SaasEntry:
     res = await session.execute(
@@ -43,7 +45,7 @@ async def create_saas(
 async def update_saas(
     saas_id: int,
     body: SaasIn,
-    _user: dict = Depends(require_editor),  # TODO(P4): require role=editor
+    _user: dict[str, Any] = Depends(require_editor),  # TODO(P4): require role=editor
     session: AsyncSession = Depends(db_session),
 ) -> SaasEntry:
     res = await session.execute(
@@ -66,7 +68,7 @@ async def update_saas(
 @router.delete("/{saas_id}", status_code=204, response_model=None, response_class=Response)
 async def delete_saas(
     saas_id: int,
-    _user: dict = Depends(require_editor),  # TODO(P4): require role=editor
+    _user: dict[str, Any] = Depends(require_editor),  # TODO(P4): require role=editor
     session: AsyncSession = Depends(db_session),
 ) -> None:
     await session.execute(text("DELETE FROM saas_catalog WHERE id=:id"), {"id": saas_id})

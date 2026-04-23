@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from loguru import logger
 
@@ -46,8 +47,8 @@ class WindowedFlow:
 
 @dataclass
 class FlowWindower:
-    inp: asyncio.Queue
-    out: asyncio.Queue
+    inp: asyncio.Queue[dict[str, Any]]
+    out: asyncio.Queue[WindowedFlow]
     window_s: int = 5
     tick_s: float = 1.0
     _buckets: dict[datetime, dict[_Key, _Acc]] = field(init=False, default_factory=dict)

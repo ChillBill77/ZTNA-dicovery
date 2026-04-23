@@ -3,7 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
@@ -20,14 +20,14 @@ LIVE_KEY = "sankey.last"
 
 
 def _filter_links(
-    delta: dict,
+    delta: dict[str, Any],
     *,
     src_cidr: str | None,
     dst_app: str | None,
     category: str | None,  # not implemented server-side in P2 — SaaS category match deferred
     proto: int | None,
     deny_only: bool,
-) -> dict:
+) -> dict[str, Any]:
     links = delta["links"]
     if src_cidr:
         try:
@@ -51,7 +51,7 @@ def _filter_links(
     return {**delta, "links": links}
 
 
-def _truncate(delta: dict, limit: int) -> dict:
+def _truncate(delta: dict[str, Any], limit: int) -> dict[str, Any]:
     links = delta["links"]
     total = len(links)
     ranked = sorted(links, key=lambda lk: lk["bytes"], reverse=True)[:limit]
@@ -106,7 +106,7 @@ async def sankey(
         )
         rows = result.mappings().all()
         # In P2 the historical path uses raw src_ip → ip:port right-column label.
-        links: list[dict] = [
+        links: list[dict[str, Any]] = [
             {
                 "src": f"ip:{r['src_ip']}",
                 "dst": f"app:{r['dst_ip']}:{r['dst_port']}",
@@ -157,7 +157,7 @@ async def raw(
     session: AsyncSession = Depends(db_session),
 ) -> RawFlowsPage:
     conds: list[str] = []
-    params: dict = {"limit": limit + 1}
+    params: dict[str, Any] = {"limit": limit + 1}
     if cursor:
         try:
             cur = decode_cursor(cursor)

@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any, cast
 
 from loguru import logger
 from redis.asyncio import Redis
@@ -70,7 +71,13 @@ class ResolverWorker:
 
     async def run_loop(self, queue_key: str = "dns:unresolved") -> None:
         while True:
-            item = await self.redis.blpop([queue_key], timeout=5)  # type: ignore[arg-type]
+            # redis-py types blpop as Union[Awaitable[list], list] because the
+            # sync and async clients share a signature; on the async client it
+            # always returns an Awaitable.
+            item = await cast(
+                Awaitable[list[Any] | None],
+                self.redis.blpop([queue_key], timeout=5),
+            )
             if item is None:
                 continue
             _k, ip = item
