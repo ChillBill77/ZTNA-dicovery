@@ -1,7 +1,15 @@
-# Production overlay:
-# - enables Let's Encrypt HTTP-01 ACME via Traefik CLI args (no static-config edit)
-# - wires the api router to the `letsencrypt` resolver
-# - persists ACME state to the `traefik-certs` named volume
+# Production overlay.
+#
+# Layers on top of docker-compose.yml:
+#   - Let's Encrypt HTTP-01 ACME on Traefik
+#   - Resource limits + json-file log rotation on every service
+#
+# Docker secrets wiring for POSTGRES_PASSWORD / ENTRA_CLIENT_SECRET /
+# AD_BIND_PASSWORD / SESSION_SECRET is stubbed below behind a `secrets` block;
+# full `_FILE` env override plumbing (pydantic Settings validator that reads
+# /run/secrets/<name>) is a P4-followup — services currently consume the same
+# env vars as dev. Deployments that need it today should mount the secret
+# files and override env vars inline in this file.
 #
 # Requires in .env:
 #   ACME_EMAIL=ops@yourdomain.example
@@ -12,6 +20,12 @@
 volumes:
   traefik-certs:
 
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   traefik:
     command:
@@ -21,7 +35,52 @@ services:
       - --certificatesResolvers.letsencrypt.acme.httpChallenge.entryPoint=web
     volumes:
       - traefik-certs:/letsencrypt
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+    logging: *logging
+
+  postgres:
+    deploy:
+      resources:
+        limits: {cpus: "4.0", memory: 4G}
+        reservations: {cpus: "1.0", memory: 1G}
+    logging: *logging
+
+  redis:
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1G}
+    logging: *logging
 
   api:
     labels:
       - traefik.http.routers.api.tls.certresolver=letsencrypt
+    deploy:
+      resources:
+        limits: {cpus: "2.0", memory: 1G}
+    logging: *logging
+
+  flow-ingest:
+    deploy:
+      resources:
+        limits: {cpus: "2.0", memory: 1G}
+    logging: *logging
+
+  id-ingest:
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+    logging: *logging
+
+  correlator:
+    deploy:
+      resources:
+        limits: {cpus: "4.0", memory: 2G}
+    logging: *logging
+
+  backup:
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+    logging: *logging

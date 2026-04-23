@@ -50,6 +50,57 @@ DOCKER_SMOKE=1 pytest tests/smoke -v   # full stack smoke test
 
 ---
 
+## Production deployment
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.prod.yml \
+  up -d
+```
+
+Prod overlay adds: Let's Encrypt ACME, per-service resource limits, json-file log rotation (50MB × 5 rolls). Docker-secrets wiring for `postgres_password` / `entra_client_secret` / `ad_bind_password` / `session_secret` is stubbed behind a `secrets` block (full `_FILE` env plumbing is a P4-followup).
+
+See [`docs/operations.md`](docs/operations.md) for the full runbook (deployment variants, secrets, upgrade, backup, incident playbooks).
+
+## Observability
+
+```bash
+make observe
+```
+
+Brings Prometheus + Grafana up behind Traefik's OIDC forwardAuth (admin role). Grafana at `https://${APP_DOMAIN}/grafana`. Dashboard + datasource provisioned from `observability/grafana/`.
+
+## Load test
+
+```bash
+LOAD_SCENARIO=sustained docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.loadtest.yml \
+  --profile loadtest up
+```
+
+Three scenarios in `loadtest/scenarios/`: `sustained` (20k flows/s × 10 min), `burst`, `identity_surge`. Weekly CI in `.github/workflows/loadtest.yml`.
+
+## E2E
+
+```bash
+cd e2e
+npm install
+npx playwright install --with-deps chromium
+MOCK_SESSION=1 npm test
+```
+
+Playwright fixtures (`e2e/fixtures/oidc-mock.ts`, `e2e/fixtures/seed-flows.ts`) mint session cookies and publish synthetic deltas via the `MOCK_SESSION`-gated `/api/test/*` routes. CI: `.github/workflows/e2e.yml`.
+
+## Security
+
+See [`docs/security.md`](docs/security.md) for supply-chain, runtime, auth, PII, and secrets posture.
+
+Supply-chain scans (`pip-audit`, `npm audit`, `trivy`, Syft SBOM) run in `.github/workflows/security.yml`; weekly Dependabot bumps via `.github/dependabot.yml`.
+
+---
+
 # GitHub Actions – Workflow Documentation
 
 This repository uses a set of GitHub Actions workflows to automate notifications, validate infrastructure changes, and enforce merge quality gates.

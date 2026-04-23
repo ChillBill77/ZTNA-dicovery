@@ -1,0 +1,1 @@
+15 02 * * * /usr/local/bin/backup-cron.sh >> /var/log/backup.log 2>&1
