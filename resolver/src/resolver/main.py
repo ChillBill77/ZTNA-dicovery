@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 import asyncpg
@@ -37,7 +38,9 @@ async def _load_saas(pool: asyncpg.Pool) -> SaasMatcher:
     return SaasMatcher([SaasRow(**dict(r)) for r in rows])
 
 
-async def _pg_upsert_factory(pool: asyncpg.Pool):
+async def _pg_upsert_factory(
+    pool: asyncpg.Pool,
+) -> Callable[[str, str | None, str | None], Awaitable[None]]:
     async def _upsert(dst_ip: str, ptr: str | None, source: str | None) -> None:
         async with pool.acquire() as conn:
             await conn.execute(
