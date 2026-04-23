@@ -3371,4 +3371,320 @@ Gate: api + web tests green; `/api/identity/resolve`, `/api/groups/{id}`, extend
 
 ---
 
-<!-- CHUNK-7-PLACEHOLDER -->
+## Chunk 7: Traefik wiring, integration tests, docs
+
+Final chunk — surface the identity entrypoints through Traefik, run the full stack end-to-end against scripted fixtures, and ship adapter + algorithm docs. Traefik TCP/UDP entrypoints `:516`/`:517`/`:518` were declared in P1 but left as routerless scaffolds; this chunk populates them and points each at id-ingest. Inside id-ingest, source-IP demux distinguishes WEF vs Winlogbeat vs ISE vs ClearPass when multiple feeds share an entrypoint (operator config lives in `/etc/flowvis/adapters/<name>.yaml`).
+
+### Task 7.1: Populate Traefik TCP/UDP routers for identity syslog
+
+**Files:**
+- Modify: `traefik/dynamic/tcp-udp.yml`
+
+- [ ] **Step 1: Replace the P1 placeholder block**
+
+```yaml
+tcp:
+  routers:
+    ad-syslog-tcp:
+      entryPoints: [ad-syslog]
+      rule: "HostSNI(`*`)"
+      service: id-ingest-tcp
+    ise-syslog-tcp:
+      entryPoints: [ise-syslog]
+      rule: "HostSNI(`*`)"
+      service: id-ingest-tcp
+    clearpass-syslog-tcp:
+      entryPoints: [clearpass-syslog]
+      rule: "HostSNI(`*`)"
+      service: id-ingest-tcp
+
+  services:
+    id-ingest-tcp:
+      loadBalancer:
+        servers:
+          - address: "id-ingest:516"
+          - address: "id-ingest:517"
+          - address: "id-ingest:518"
+
+udp:
+  routers:
+    ad-syslog-udp:
+      entryPoints: [ad-syslog]
+      service: id-ingest-udp
+    ise-syslog-udp:
+      entryPoints: [ise-syslog]
+      service: id-ingest-udp
+    clearpass-syslog-udp:
+      entryPoints: [clearpass-syslog]
+      service: id-ingest-udp
+
+  services:
+    id-ingest-udp:
+      loadBalancer:
+        servers:
+          - address: "id-ingest:516"
+          - address: "id-ingest:517"
+          - address: "id-ingest:518"
+```
+
+Because Traefik TCP/UDP routers have no concept of "route by source IP", each entrypoint forwards indiscriminately to all three id-ingest ports. Adapter YAML in `/etc/flowvis/adapters/` restricts *which* adapter accepts a given source IP (e.g., `cisco_ise_adapter` config lists `allowed_sources: [10.0.100.10, 10.0.100.11]`). Adapters not on the list silently drop the line and increment `id_ingest_source_ip_mismatch_total`.
+
+- [ ] **Step 2: Validate Traefik config syntactically**
+
+Run: `docker run --rm -v $(pwd)/traefik:/etc/traefik traefik:v3.1 traefik --configfile=/etc/traefik/traefik.yml --dryRun`
+Expected: no errors (router/service references resolve).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add traefik/dynamic/tcp-udp.yml
+git commit -m "feat(traefik): wire identity syslog entrypoints to id-ingest"
+```
+
+---
+
+### Task 7.2: Integration test harness — replay identity + flow fixtures through the stack
+
+**Files:**
+- Create: `tests/integration/test_identity_pipeline.py`
+- Create: `tests/integration/fixtures/identity_scenario_a.yml`
+- Create: `tests/integration/fixtures/identity_scenario_b.yml`
+- Create: `tests/integration/fixtures/identity_scenario_c.yml`
+
+- [ ] **Step 1: Author scenarios**
+
+Each YAML file is read by the test harness and scripts (a) identity events to push into `identity.events`, (b) flow events to push into `flows.raw`, (c) `user_groups` rows to seed, (d) the expected `SankeyDelta` shape.
+
+`identity_scenario_a.yml` (happy path, LCD returns a group):
+
+```yaml
+user_groups:
+  - {user_upn: alice, group_id: "g:sales-emea", group_name: "Sales EMEA", group_source: entra}
+  - {user_upn: alice, group_id: "g:everyone", group_name: "Everyone", group_source: entra}
+  - {user_upn: bob,   group_id: "g:sales-emea", group_name: "Sales EMEA", group_source: entra}
+  - {user_upn: bob,   group_id: "g:everyone", group_name: "Everyone", group_source: entra}
+
+identity_events:
+  - {ts: "2026-04-22T12:00:00Z", src_ip: 10.0.0.1, user_upn: alice, source: entra_signin, event_type: logon, confidence: 80, ttl_seconds: 3600}
+  - {ts: "2026-04-22T12:00:00Z", src_ip: 10.0.0.2, user_upn: bob,   source: entra_signin, event_type: logon, confidence: 80, ttl_seconds: 3600}
+
+flows:
+  - {ts: "2026-04-22T12:00:05Z", src_ip: 10.0.0.1, dst_ip: 52.96.7.1, dst_port: 443, proto: 6, bytes: 1000, packets: 8, flow_count: 1, source: palo_alto}
+  - {ts: "2026-04-22T12:00:05Z", src_ip: 10.0.0.2, dst_ip: 52.96.7.1, dst_port: 443, proto: 6, bytes: 2000, packets: 16, flow_count: 1, source: palo_alto}
+
+expect:
+  group_by: group
+  left_labels: ["Sales EMEA"]
+  link_users_count: 2
+```
+
+`identity_scenario_b.yml` — LCD miss (only overlap is `Everyone` which is excluded) → expect per-user strands.
+`identity_scenario_c.yml` — no binding → expect amber unknown strand, and after a second identity event arrives for one of the two src_ips the next window should mix "alice" + "unknown".
+
+- [ ] **Step 2: Write harness**
+
+```python
+import pathlib
+import yaml
+import pytest
+
+SCN_DIR = pathlib.Path(__file__).parent / "fixtures"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["identity_scenario_a.yml", "identity_scenario_b.yml", "identity_scenario_c.yml"])
+async def test_identity_pipeline_end_to_end(compose_stack, scenario):
+    cfg = yaml.safe_load((SCN_DIR / scenario).read_text())
+    await compose_stack.seed_user_groups(cfg["user_groups"])
+    await compose_stack.publish_identity_events(cfg["identity_events"])
+    await compose_stack.publish_flow_events(cfg["flows"])
+
+    delta = await compose_stack.wait_for_next_sankey_delta(timeout=10)
+    expected = cfg["expect"]
+
+    labels = [n["label"] for n in delta["nodes_left"]]
+    assert labels == expected["left_labels"]
+    if "link_users_count" in expected:
+        assert delta["links"][0]["users"] == expected["link_users_count"]
+    if scenario.endswith("b.yml"):
+        # per-user fallback — left-labels must be exactly the two user UPNs
+        assert set(labels) == {"alice", "bob"}
+    if scenario.endswith("c.yml"):
+        assert "unknown" in labels
+        assert any(link["src"] == "unknown" for link in delta["links"])
+```
+
+- [ ] **Step 3: Run under Compose**
+
+Run: `make integration-test` (wired in P1) — expected: three scenarios PASS against a live stack; fixtures replay via Redis XADD for identity.events + flows.raw and SQL seed for user_groups.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add tests/integration/test_identity_pipeline.py tests/integration/fixtures/
+git commit -m "test(integration): P3 identity + LCD fixtures through full stack"
+```
+
+---
+
+### Task 7.3: Playwright smoke — mode toggling + member list modal + banner visibility
+
+**Files:**
+- Create: `web/e2e/identity_sankey.spec.ts`
+
+- [ ] **Step 1: Write spec**
+
+```ts
+import { test, expect } from "@playwright/test";
+
+test("operator can switch left-column modes and see group modal", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /sankey/i })).toBeVisible();
+
+  // default Groups mode
+  await page.getByRole("button", { name: /groups/i }).click();
+  await expect(page.locator("[data-testid='sankey-left-node']").first()).toHaveAttribute("data-kind", "group");
+
+  // Users
+  await page.getByRole("button", { name: /users/i }).click();
+  await expect(page.url()).toContain("group_by=user");
+
+  // Source IPs
+  await page.getByRole("button", { name: /source ips/i }).click();
+  await expect(page.url()).toContain("group_by=src_ip");
+
+  // Members modal
+  await page.getByRole("button", { name: /groups/i }).click();
+  await page.locator("[data-testid='sankey-left-node']").first().click();
+  await expect(page.getByRole("dialog", { name: /members/i })).toBeVisible();
+  await expect(page.locator("[data-testid='member-row']")).toHaveCount(200);
+});
+
+test("unknown-strand banner appears when >50% unknown for 10 min", async ({ page }) => {
+  await page.route("**/api/stats", (route) =>
+    route.fulfill({ json: { unknown_user_ratio: 0.7, group_sync_age_seconds: 60 } }),
+  );
+  await page.goto("/");
+  // Banner only appears after sustained window; test harness hook forces immediate display
+  await page.evaluate(() => (window as any).__forceUnknownBanner());
+  await expect(page.getByRole("alert")).toContainText(/check identity sources/i);
+});
+```
+
+- [ ] **Step 2: Run**
+
+Run: `cd web && npx playwright test e2e/identity_sankey.spec.ts`
+Expected: both scenarios PASS headless.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add web/e2e/identity_sankey.spec.ts
+git commit -m "test(web): Playwright smoke for mode toggle + group modal + banner"
+```
+
+---
+
+### Task 7.4: Adapter runbook — `docs/adapters.md`
+
+**Files:**
+- Create: `docs/adapters.md`
+
+- [ ] **Step 1: Write runbook covering all four identity adapters**
+
+Sections (≈150–200 lines total, one per source):
+
+1. **AD Event 4624 (WEF + Winlogbeat)**
+   - Configure a **Windows Event Forwarding (WEF)** collector on a domain controller.
+   - Install **Winlogbeat** on the collector; sample `winlogbeat.yml` snippet forwarding `Security/4624` to `udp://<stack-host>:516`.
+   - JSON output format Winlogbeat emits (the shape the adapter parses).
+   - Logon-type filter table, reference to `CONFIDENCE_BY_LOGON_TYPE`.
+   - Validation: `logger --rfc5424 --server <host> --port 516 --udp "<sample>"` should produce an event in `identity_events`.
+
+2. **Entra ID sign-in logs (Graph API)**
+   - Create an **App Registration** in Entra.
+   - Grant **application permission** `AuditLog.Read.All` (admin consent).
+   - Generate a client secret; set `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`.
+   - Configure `ENTRA_CORP_CIDRS` for the confidence 80/40 split.
+   - Delta-poll cadence: 60 s (default); Graph throttling notes.
+
+3. **Cisco ISE RADIUS Accounting (LiveLogs)**
+   - ISE **Logging Targets** → add syslog destination `<stack-host>:517/udp`.
+   - **Logging Categories** → enable `RADIUS Accounting` at `INFO`.
+   - Keep `Start` and `Stop` both forwarded (adapter invalidates on Stop).
+   - Sample line shape referencing `User-Name`, `Framed-IP-Address`, `Calling-Station-ID`, `Session-Timeout`.
+
+4. **Aruba ClearPass (CEF)**
+   - **Administration → External Servers → Syslog Export** → add `<stack-host>:518/udp`.
+   - Export format: **CEF**.
+   - Subscribe to **Session Logs**.
+   - Fields: `src`, `suser`, `smac`, `cs2Label=Session-Timeout`, `externalId`.
+
+Close with a **Troubleshooting** checklist: verify Traefik TCP/UDP router logs, `docker logs id-ingest`, `identity_events` row count, and confidence distribution SQL snippet.
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add docs/adapters.md
+git commit -m "docs: P3 adapter runbook (WEF/Winlogbeat, Entra, ISE, ClearPass)"
+```
+
+---
+
+### Task 7.5: Identity model reference — `docs/identity-model.md`
+
+**Files:**
+- Create: `docs/identity-model.md`
+
+- [ ] **Step 1: Write reference**
+
+Sections:
+
+1. **Confidence ranking table** (reproduce spec §4.2) with a short rationale column.
+2. **TTL semantics** — when TTL starts (event `ts`), how Stop events set TTL to 0, what "expired" means (lazy eviction on lookup).
+3. **Resolution algorithm** — pseudo-code mirroring `IdentityIndex.resolve` (highest confidence, most-recent tiebreak, None → `"unknown"`).
+4. **LCD algorithm** — pseudo-code reproducing spec §6.3 with the fallback cascade:
+   - Unknown users → separate strand.
+   - LCD `None` → per-user strands.
+   - Single user above `single_user_floor` → per-user strand.
+5. **Excluded groups rationale** — why `Domain Users`, `Authenticated Users`, `Everyone` are excluded by default (they never narrow the denominator). Guidance on adding custom exclusions.
+6. **Group membership freshness** — nightly full + on-demand on first-sight; staleness tolerance 24 h / alert 48 h; `NOTIFY groups_changed` reload path.
+7. **Metric glossary** — `correlator_unknown_user_ratio`, `correlator_lcd_miss_total`, `identity_index_size`, `group_sync_last_full_cycle_seconds`.
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add docs/identity-model.md
+git commit -m "docs: identity + LCD algorithm reference"
+```
+
+---
+
+### Task 7.6: Final gate — full CI
+
+**Files:** none (verification only)
+
+- [ ] **Step 1: Run everything**
+
+```bash
+pip install -e common/[dev] -e flow-ingest/[dev] -e id-ingest/[dev] -e correlator/[dev] -e api/[dev]
+pytest common/ flow-ingest/ id-ingest/ correlator/ api/ tests/
+cd web && npm test && npx playwright test
+cd .. && docker compose -f docker-compose.yml -f docker-compose.dev.yml config >/dev/null
+```
+
+Expected: all unit, integration, Playwright suites green; compose config validates; Traefik dry-run clean.
+
+- [ ] **Step 2: Tag and push**
+
+```bash
+git push -u origin plan/p3-draft
+```
+
+Open PR titled "docs: P3 identity + LCD implementation plan" against `main`.
+
+---
+
+**End of Chunk 7 — end of Plan 3.**
+Exit criteria: identity enrichment + LCD shipped behind TDD; new routes + UX surface live; operator runbooks + model reference published. P4 (OIDC auth, observability, load tests, hardening) can now begin against a feature-complete pipeline.
