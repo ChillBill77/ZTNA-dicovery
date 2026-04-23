@@ -15,6 +15,13 @@ services:
     volumes:
       - ./api/src:/app/src
 
+  id-ingest:
+    volumes:
+      - ./common/src:/app/common/src
+      - ./id-ingest/src:/app/id-ingest/src
+    environment:
+      LOG_LEVEL: DEBUG
+
   mock-syslog-generator:
     build:
       context: .
