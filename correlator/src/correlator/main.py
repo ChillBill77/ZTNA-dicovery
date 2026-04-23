@@ -23,6 +23,14 @@ from correlator.pipeline.windower import FlowWindower, WindowedFlow
 from correlator.pipeline.writer import Writer
 from correlator.settings import CorrelatorSettings
 
+# TODO(P3-followup): wire the identity-side pipeline stages into _main() so the
+# runtime consumes `identity.events`, enriches windowed flows with user_upn +
+# groups, and runs the LCD GroupAggregator. The stages themselves and their
+# unit tests are already in place under correlator.pipeline.{identity_index,
+# group_index, enricher, group_aggregator}; only the main-loop plumbing is
+# deferred, since the P2 flow pipeline is load-bearing and rewriting it should
+# happen in a focused follow-up PR rather than inside P3.
+
 
 async def _read_xstream_into(
     redis: Redis,

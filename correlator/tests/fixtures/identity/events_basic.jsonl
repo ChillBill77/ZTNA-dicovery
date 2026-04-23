@@ -1,0 +1,2 @@
+{"ts":"2026-04-22T12:00:00Z","src_ip":"10.0.12.34","user_upn":"alice","source":"ad_4624","event_type":"logon","confidence":90,"ttl_seconds":28800}
+{"ts":"2026-04-22T12:00:30Z","src_ip":"10.0.20.12","user_upn":"bob","source":"aruba_clearpass","event_type":"nac-auth","confidence":95,"ttl_seconds":3600}
