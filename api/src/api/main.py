@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from api.db import init_engine, ping_db
 from api.redis import init_redis, ping_redis
+from api.routers import adapters, applications, flows, saas, ws
+from api.routers.ws import shutdown as ws_shutdown
+from api.routers.ws import startup as ws_startup
 from api.settings import Settings
 
 
@@ -15,7 +20,11 @@ async def _lifespan(app: FastAPI):
     settings = Settings()
     init_engine(settings)
     init_redis(settings)
-    yield
+    await ws_startup()
+    try:
+        yield
+    finally:
+        await ws_shutdown()
 
 
 def build_app() -> FastAPI:
@@ -37,6 +46,18 @@ def build_app() -> FastAPI:
                 "components": {"db": db_ok, "redis": redis_ok},
             },
         )
+
+    app.include_router(flows.router)
+    app.include_router(applications.router)
+    app.include_router(saas.router)
+    app.include_router(adapters.router)
+    app.include_router(ws.router)
+
+    # When the web SPA has been bundled into /app/web-dist, serve it at root.
+    # In dev the separate Vite server replaces this behavior.
+    web_dist = Path("/app/web-dist")
+    if web_dist.is_dir():
+        app.mount("/", StaticFiles(directory=str(web_dist), html=True), name="web")
 
     return app
 
