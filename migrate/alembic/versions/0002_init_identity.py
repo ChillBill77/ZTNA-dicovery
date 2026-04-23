@@ -4,6 +4,7 @@ Revision ID: 0002
 Revises: 0001
 Create Date: 2026-04-22
 """
+
 from __future__ import annotations
 
 from alembic import op
@@ -30,7 +31,8 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        "SELECT create_hypertable('identity_events', 'time', chunk_time_interval => INTERVAL '1 hour');"
+        "SELECT create_hypertable('identity_events', 'time', "
+        "chunk_time_interval => INTERVAL '1 hour');"
     )
     op.execute("SELECT add_retention_policy('identity_events', INTERVAL '30 days');")
     op.execute("CREATE INDEX ON identity_events (src_ip, time DESC);")

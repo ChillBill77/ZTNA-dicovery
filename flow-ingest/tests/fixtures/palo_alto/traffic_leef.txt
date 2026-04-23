@@ -1,0 +1,1 @@
+<14>1 2026-04-22T14:12:07Z fw01 LEEF:2.0|Palo Alto Networks|PAN-OS|10.2|TRAFFIC|cat=end|src=10.0.0.3|dst=142.250.190.46|srcPort=51000|dstPort=443|proto=tcp|app=ms-teams|bytesTotal=2048|packetsTotal=16|action=allow|hostname=teams.microsoft.com

@@ -4,6 +4,7 @@ Revision ID: 0001
 Revises:
 Create Date: 2026-04-22
 """
+
 from __future__ import annotations
 
 from alembic import op
@@ -38,7 +39,8 @@ def upgrade() -> None:
     op.execute("CREATE INDEX ON flows (src_ip, time DESC);")
     op.execute("CREATE INDEX ON flows (dst_ip, dst_port, time DESC);")
     op.execute(
-        "COMMENT ON COLUMN flows.source IS 'adapter name (e.g. palo_alto, fortigate) — NOT firewall hostname';"
+        "COMMENT ON COLUMN flows.source IS "
+        "'adapter name (e.g. palo_alto, fortigate) — NOT firewall hostname';"
     )
     op.execute(
         """

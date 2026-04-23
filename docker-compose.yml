@@ -49,7 +49,9 @@ services:
     restart: "no"
 
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     env_file: .env
     depends_on:
       migrate:
@@ -97,3 +99,51 @@ services:
     depends_on:
       api:
         condition: service_started    # edge router must not block on backend health
+
+  flow-ingest:
+    build:
+      context: .
+      dockerfile: flow-ingest/Dockerfile
+    env_file: .env
+    environment:
+      SYSLOG_HOST: 0.0.0.0
+      SYSLOG_PORT: 5514
+      CONFIG_DIR: /etc/flowvis/adapters
+    volumes:
+      - ./config/adapters:/etc/flowvis/adapters:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [backend]
+    expose:
+      - "5514/udp"
+      - "5514/tcp"
+    restart: unless-stopped
+
+  resolver:
+    build:
+      context: .
+      dockerfile: resolver/Dockerfile
+    env_file: .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks: [backend]
+    restart: unless-stopped
+
+  correlator:
+    build:
+      context: .
+      dockerfile: correlator/Dockerfile
+    env_file: .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      flow-ingest:
+        condition: service_started
+    networks: [backend]
+    restart: unless-stopped

@@ -1,0 +1,41 @@
+# Integration-test overlay. Layered via:
+#   docker compose -f docker-compose.yml -f compose.test.yml up -d --build
+# - Drops Traefik (tests hit api directly on backend network)
+# - Speeds up healthchecks
+# - Mounts fixture dir for replay helper
+
+services:
+  postgres:
+    healthcheck:
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    healthcheck:
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  flow-ingest:
+    environment:
+      FLOWINGEST_SYSLOG_UDP_PORT: 5514
+      FLOWINGEST_SYSLOG_TCP_PORT: 5514
+    ports:
+      - "5514:5514/udp"
+      - "5514:5514/tcp"
+    volumes:
+      - ./tests/fixtures:/fixtures:ro
+
+  correlator:
+    environment:
+      CORRELATOR_WINDOW_SECONDS: 1    # tighter window for test speed
+      CORRELATOR_FLUSH_INTERVAL_MS: 200
+
+  api:
+    ports:
+      - "8000:8000"
+
+  # Traefik intentionally omitted for integration — tests hit api directly
+  traefik:
+    profiles: ["disabled"]
