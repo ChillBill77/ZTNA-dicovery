@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 
 import fakeredis.aioredis
 import pytest
-
 from resolver.resolver_worker import ResolverWorker
 from resolver.saas_matcher import SaasMatcher, SaasRow
 
@@ -41,8 +40,11 @@ async def test_cache_miss_does_lookup_and_caches() -> None:
     pg = AsyncMock()
 
     w = ResolverWorker(
-        redis=redis, dns_resolver=mock_resolver,
-        saas=SaasMatcher([]), pg_upsert=pg, rate_per_s=100,
+        redis=redis,
+        dns_resolver=mock_resolver,
+        saas=SaasMatcher([]),
+        pg_upsert=pg,
+        rate_per_s=100,
     )
     await w.process_one("8.8.8.8")
 
@@ -59,8 +61,11 @@ async def test_nxdomain_caches_empty() -> None:
     mock_resolver.gethostbyaddr.side_effect = OSError("NXDOMAIN")
 
     w = ResolverWorker(
-        redis=redis, dns_resolver=mock_resolver,
-        saas=SaasMatcher([]), pg_upsert=AsyncMock(), rate_per_s=100,
+        redis=redis,
+        dns_resolver=mock_resolver,
+        saas=SaasMatcher([]),
+        pg_upsert=AsyncMock(),
+        rate_per_s=100,
     )
     await w.process_one("192.0.2.1")
 
@@ -72,15 +77,19 @@ async def test_nxdomain_caches_empty() -> None:
 async def test_saas_match_cached() -> None:
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     mock_resolver = AsyncMock()
-    mock_resolver.gethostbyaddr.return_value = SimpleAddrInfo(
-        name="tenant.outlook.office365.com")
+    mock_resolver.gethostbyaddr.return_value = SimpleAddrInfo(name="tenant.outlook.office365.com")
 
-    saas = SaasMatcher([
-        SaasRow(id=42, name="M365", pattern=".office365.com", priority=100),
-    ])
+    saas = SaasMatcher(
+        [
+            SaasRow(id=42, name="M365", pattern=".office365.com", priority=100),
+        ]
+    )
     w = ResolverWorker(
-        redis=redis, dns_resolver=mock_resolver, saas=saas,
-        pg_upsert=AsyncMock(), rate_per_s=100,
+        redis=redis,
+        dns_resolver=mock_resolver,
+        saas=saas,
+        pg_upsert=AsyncMock(),
+        rate_per_s=100,
     )
     await w.process_one("52.97.1.1")
 
@@ -94,13 +103,16 @@ async def test_rate_limit_enforced() -> None:
     mock_resolver.gethostbyaddr.return_value = SimpleAddrInfo(name="x.example.com")
 
     w = ResolverWorker(
-        redis=redis, dns_resolver=mock_resolver, saas=SaasMatcher([]),
-        pg_upsert=AsyncMock(), rate_per_s=2,  # 2 qps
+        redis=redis,
+        dns_resolver=mock_resolver,
+        saas=SaasMatcher([]),
+        pg_upsert=AsyncMock(),
+        rate_per_s=2,  # 2 qps
     )
 
     start = asyncio.get_running_loop().time()
     await w.process_one("10.0.0.1")
     await w.process_one("10.0.0.2")
-    await w.process_one("10.0.0.3")      # must wait for bucket to refill
+    await w.process_one("10.0.0.3")  # must wait for bucket to refill
     elapsed = asyncio.get_running_loop().time() - start
     assert elapsed >= 0.4  # 3rd call waits ~500ms

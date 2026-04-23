@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class AdapterHealth(BaseModel):
     name: str
-    kind: str         # 'flow' | 'identity'
+    kind: str  # 'flow' | 'identity'
     enabled: bool
     events_per_sec: float = 0.0
     queue_depth: int = 0

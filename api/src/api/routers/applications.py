@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.dependencies import current_user, db_session, require_editor
+from api.dependencies import db_session, require_editor
 from api.schemas.applications import Application, ApplicationIn, AuditEntry
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
@@ -12,15 +12,20 @@ router = APIRouter(prefix="/api/applications", tags=["applications"])
 
 @router.get("", response_model=list[Application])
 async def list_apps(
-    limit: int = 200, offset: int = 0, session: AsyncSession = Depends(db_session),
+    limit: int = 200,
+    offset: int = 0,
+    session: AsyncSession = Depends(db_session),
 ) -> list[Application]:
-    res = await session.execute(text(
-        """SELECT id, name, description, owner, dst_cidr::text AS dst_cidr,
+    res = await session.execute(
+        text(
+            """SELECT id, name, description, owner, dst_cidr::text AS dst_cidr,
                   dst_port_min, dst_port_max, proto, priority, source,
                   created_at, updated_at, updated_by
            FROM applications ORDER BY priority DESC, id
            LIMIT :limit OFFSET :offset"""
-    ), {"limit": limit, "offset": offset})
+        ),
+        {"limit": limit, "offset": offset},
+    )
     return [Application(**dict(r)) for r in res.mappings().all()]
 
 
@@ -30,8 +35,9 @@ async def create_app(
     user: dict = Depends(require_editor),  # TODO(P4): require role=editor
     session: AsyncSession = Depends(db_session),
 ) -> Application:
-    res = await session.execute(text(
-        """INSERT INTO applications (name, description, owner, dst_cidr,
+    res = await session.execute(
+        text(
+            """INSERT INTO applications (name, description, owner, dst_cidr,
                                      dst_port_min, dst_port_max, proto, priority,
                                      source, updated_by)
            VALUES (:name, :description, :owner, :dst_cidr::cidr,
@@ -40,13 +46,17 @@ async def create_app(
            RETURNING id, name, description, owner, dst_cidr::text AS dst_cidr,
                      dst_port_min, dst_port_max, proto, priority, source,
                      created_at, updated_at, updated_by"""
-    ), {**body.model_dump(), "updated_by": user["upn"]})
+        ),
+        {**body.model_dump(), "updated_by": user["upn"]},
+    )
     row = res.mappings().one()
-    await session.execute(text(
-        """INSERT INTO application_audit (application_id, changed_by, op, after)
+    await session.execute(
+        text(
+            """INSERT INTO application_audit (application_id, changed_by, op, after)
            VALUES (:id, :by, 'create', :after::jsonb)"""
-    ), {"id": row["id"], "by": user["upn"],
-        "after": Application(**dict(row)).model_dump_json()})
+        ),
+        {"id": row["id"], "by": user["upn"], "after": Application(**dict(row)).model_dump_json()},
+    )
     await session.commit()
     return Application(**dict(row))
 
@@ -58,18 +68,22 @@ async def update_app(
     user: dict = Depends(require_editor),  # TODO(P4): require role=editor
     session: AsyncSession = Depends(db_session),
 ) -> Application:
-    before_res = await session.execute(text(
-        """SELECT id, name, description, owner, dst_cidr::text AS dst_cidr,
+    before_res = await session.execute(
+        text(
+            """SELECT id, name, description, owner, dst_cidr::text AS dst_cidr,
                   dst_port_min, dst_port_max, proto, priority, source,
                   created_at, updated_at, updated_by
            FROM applications WHERE id = :id"""
-    ), {"id": app_id})
+        ),
+        {"id": app_id},
+    )
     before = before_res.mappings().first()
     if before is None:
         raise HTTPException(status_code=404, detail="application not found")
 
-    res = await session.execute(text(
-        """UPDATE applications
+    res = await session.execute(
+        text(
+            """UPDATE applications
               SET name=:name, description=:description, owner=:owner,
                   dst_cidr=:dst_cidr::cidr, dst_port_min=:dst_port_min,
                   dst_port_max=:dst_port_max, proto=:proto, priority=:priority,
@@ -78,16 +92,22 @@ async def update_app(
             RETURNING id, name, description, owner, dst_cidr::text AS dst_cidr,
                       dst_port_min, dst_port_max, proto, priority, source,
                       created_at, updated_at, updated_by"""
-    ), {**body.model_dump(), "id": app_id, "updated_by": user["upn"]})
+        ),
+        {**body.model_dump(), "id": app_id, "updated_by": user["upn"]},
+    )
     after = res.mappings().one()
-    await session.execute(text(
-        """INSERT INTO application_audit (application_id, changed_by, op, before, after)
+    await session.execute(
+        text(
+            """INSERT INTO application_audit (application_id, changed_by, op, before, after)
            VALUES (:id, :by, 'update', :before::jsonb, :after::jsonb)"""
-    ), {
-        "id": app_id, "by": user["upn"],
-        "before": Application(**dict(before)).model_dump_json(),
-        "after": Application(**dict(after)).model_dump_json(),
-    })
+        ),
+        {
+            "id": app_id,
+            "by": user["upn"],
+            "before": Application(**dict(before)).model_dump_json(),
+            "after": Application(**dict(after)).model_dump_json(),
+        },
+    )
     await session.commit()
     return Application(**dict(after))
 
@@ -99,12 +119,15 @@ async def delete_app(
     session: AsyncSession = Depends(db_session),
 ) -> None:
     # Write audit BEFORE delete because of ON DELETE CASCADE on application_audit.
-    before_res = await session.execute(text(
-        """SELECT id, name, description, owner, dst_cidr::text AS dst_cidr,
+    before_res = await session.execute(
+        text(
+            """SELECT id, name, description, owner, dst_cidr::text AS dst_cidr,
                   dst_port_min, dst_port_max, proto, priority, source,
                   created_at, updated_at, updated_by
            FROM applications WHERE id=:id"""
-    ), {"id": app_id})
+        ),
+        {"id": app_id},
+    )
     before = before_res.mappings().first()
     if before is None:
         raise HTTPException(status_code=404, detail="application not found")
@@ -117,11 +140,15 @@ async def delete_app(
 
 @router.get("/{app_id}/audit", response_model=list[AuditEntry])
 async def get_audit(
-    app_id: int, session: AsyncSession = Depends(db_session),
+    app_id: int,
+    session: AsyncSession = Depends(db_session),
 ) -> list[AuditEntry]:
-    res = await session.execute(text(
-        """SELECT id, application_id, changed_at, changed_by, op, before, after
+    res = await session.execute(
+        text(
+            """SELECT id, application_id, changed_at, changed_by, op, before, after
            FROM application_audit WHERE application_id = :id
            ORDER BY changed_at DESC"""
-    ), {"id": app_id})
+        ),
+        {"id": app_id},
+    )
     return [AuditEntry(**dict(r)) for r in res.mappings().all()]

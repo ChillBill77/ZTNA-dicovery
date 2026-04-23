@@ -3,15 +3,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass, field
-from typing import Tuple
 
 from loguru import logger
 
-Message = Tuple[str, str]   # (peer_ip, line)
+Message = tuple[str, str]  # (peer_ip, line)
 
 
 class _UDPProtocol(asyncio.DatagramProtocol):
-    def __init__(self, queue: asyncio.Queue[Message], parent: "SyslogReceiver") -> None:
+    def __init__(self, queue: asyncio.Queue[Message], parent: SyslogReceiver) -> None:
         self._queue = queue
         self._parent = parent
 
@@ -25,7 +24,7 @@ class _UDPProtocol(asyncio.DatagramProtocol):
 async def _handle_tcp_client(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
-    parent: "SyslogReceiver",
+    parent: SyslogReceiver,
 ) -> None:
     peer = writer.get_extra_info("peername") or ("unknown", 0)
     peer_ip = peer[0]
@@ -45,7 +44,7 @@ async def _handle_tcp_client(
             await writer.wait_closed()
 
 
-def _drain_buffer(buf: bytes, peer_ip: str, parent: "SyslogReceiver") -> bytes:
+def _drain_buffer(buf: bytes, peer_ip: str, parent: SyslogReceiver) -> bytes:
     while buf:
         # Octet-counting: leading ASCII digits + space + body of that length.
         if buf[:1].isdigit():
@@ -93,15 +92,11 @@ class SyslogReceiver:
         try:
             self.queue.put_nowait((peer_ip, line))
         except asyncio.QueueFull:
-            try:
+            with contextlib.suppress(asyncio.QueueEmpty):
                 _ = self.queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
             self.backpressure_drops += 1
-            try:
+            with contextlib.suppress(asyncio.QueueFull):
                 self.queue.put_nowait((peer_ip, line))
-            except asyncio.QueueFull:
-                pass
 
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
@@ -121,7 +116,8 @@ class SyslogReceiver:
         self.tcp_port = self._tcp_server.sockets[0].getsockname()[1]
         logger.info(
             "syslog receiver listening udp={}, tcp={}",
-            self.udp_port, self.tcp_port,
+            self.udp_port,
+            self.tcp_port,
         )
 
     async def stop(self) -> None:

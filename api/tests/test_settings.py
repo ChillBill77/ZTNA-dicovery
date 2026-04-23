@@ -18,7 +18,7 @@ def test_settings_loads_from_env(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_settings_defaults_when_missing(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.chdir(tmp_path)        # no .env in cwd
+    monkeypatch.chdir(tmp_path)  # no .env in cwd
     for var in ("DATABASE_URL", "REDIS_URL", "LOG_LEVEL"):
         monkeypatch.delenv(var, raising=False)
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from flow_ingest.adapters.palo_alto_adapter import PaloAltoAdapter
 
 FIX = Path(__file__).parent / "fixtures" / "palo_alto"

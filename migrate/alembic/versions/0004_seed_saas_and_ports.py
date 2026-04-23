@@ -4,6 +4,7 @@ Revision ID: 0004
 Revises: 0003
 Create Date: 2026-04-22
 """
+
 from __future__ import annotations
 
 import csv

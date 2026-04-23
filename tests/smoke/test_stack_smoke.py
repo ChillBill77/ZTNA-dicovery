@@ -7,6 +7,7 @@ A passing smoke test requires:
   - migrate container ran to completion with exit code 0
   - api's /health/ready returns 200 with both components healthy
 """
+
 from __future__ import annotations
 
 import json
@@ -25,7 +26,10 @@ COMPOSE_FILES = ["-f", "docker-compose.yml", "-f", "docker-compose.dev.yml"]
 def _compose(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["docker", "compose", *COMPOSE_FILES, *args],
-        env=env, text=True, capture_output=True, check=True,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
     )
 
 
@@ -39,14 +43,22 @@ def _probe_ready(env: dict[str, str], timeout_s: int = 120) -> dict[str, object]
     while time.monotonic() < deadline:
         result = subprocess.run(
             [
-                "docker", "compose", *COMPOSE_FILES,
-                "exec", "-T", "api",
-                "python", "-c",
+                "docker",
+                "compose",
+                *COMPOSE_FILES,
+                "exec",
+                "-T",
+                "api",
+                "python",
+                "-c",
                 "import json,sys,urllib.request;"
                 "r=urllib.request.urlopen('http://localhost:8000/health/ready');"
                 "sys.stdout.write(str(r.status)+'\\n'+r.read().decode())",
             ],
-            env=env, text=True, capture_output=True, check=False,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
         )
         if result.returncode == 0:
             status_line, _, body = result.stdout.partition("\n")
@@ -78,12 +90,20 @@ def test_stack_comes_up_and_migrate_applies(smoke_env: dict[str, str]) -> None:
         # migrate must have exited successfully (it runs once and exits).
         ps = subprocess.run(
             ["docker", "compose", *COMPOSE_FILES, "ps", "-a", "--format", "json", "migrate"],
-            env=smoke_env, text=True, capture_output=True, check=True,
+            env=smoke_env,
+            text=True,
+            capture_output=True,
+            check=True,
         )
         # `ps --format json` emits one JSON object per line; parse whichever form.
         raw = ps.stdout.strip()
-        rows = [json.loads(ln) for ln in raw.splitlines() if ln.strip()] if raw.startswith("{") \
-            else json.loads(raw) if raw else []
+        rows = (
+            [json.loads(ln) for ln in raw.splitlines() if ln.strip()]
+            if raw.startswith("{")
+            else json.loads(raw)
+            if raw
+            else []
+        )
         assert rows, "migrate container not found in docker compose ps"
         migrate_state = rows[0]
         assert migrate_state.get("ExitCode", 1) == 0, (
@@ -95,5 +115,6 @@ def test_stack_comes_up_and_migrate_applies(smoke_env: dict[str, str]) -> None:
     finally:
         subprocess.run(
             ["docker", "compose", *COMPOSE_FILES, "down", "-v", "--remove-orphans"],
-            env=smoke_env, check=False,
+            env=smoke_env,
+            check=False,
         )

@@ -8,7 +8,7 @@ _client: Redis | None = None
 
 
 def init_redis(settings: Settings) -> None:
-    global _client
+    global _client  # noqa: PLW0603 — module-level singleton
     _client = Redis.from_url(settings.redis_url, decode_responses=True)
 
 
@@ -23,5 +23,5 @@ async def ping_redis() -> bool:
         return False
     try:
         return bool(await _client.ping())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False

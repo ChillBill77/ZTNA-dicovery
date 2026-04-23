@@ -5,7 +5,6 @@ import json
 
 import fakeredis.aioredis
 import pytest
-
 from api.ws_fanout import ClientState, SankeyFanout
 
 
@@ -25,14 +24,23 @@ async def test_fanout_dispatches_message_to_matching_client() -> None:
 
     # Give the subscribe loop a moment to attach before publishing.
     await asyncio.sleep(0.1)
-    await redis.publish("sankey.live", json.dumps({
-        "ts": "t", "window_s": 5, "nodes_left": [], "nodes_right": [],
-        "links": [
-            {"src": "ip:10.0.0.1", "dst": "app:M365", "bytes": 1, "flows": 1, "users": 0},
-            {"src": "ip:10.0.0.2", "dst": "app:Other", "bytes": 1, "flows": 1, "users": 0},
-        ],
-        "lossy": False, "dropped_count": 0,
-    }))
+    await redis.publish(
+        "sankey.live",
+        json.dumps(
+            {
+                "ts": "t",
+                "window_s": 5,
+                "nodes_left": [],
+                "nodes_right": [],
+                "links": [
+                    {"src": "ip:10.0.0.1", "dst": "app:M365", "bytes": 1, "flows": 1, "users": 0},
+                    {"src": "ip:10.0.0.2", "dst": "app:Other", "bytes": 1, "flows": 1, "users": 0},
+                ],
+                "lossy": False,
+                "dropped_count": 0,
+            }
+        ),
+    )
     await asyncio.sleep(0.2)
 
     fan.remove_client(client)

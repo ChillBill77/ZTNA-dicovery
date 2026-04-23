@@ -25,7 +25,10 @@ async def _run(s: MockSettings) -> None:
 
     logger.info(
         "mock syslog generator: {} vendors at {} qps → {}:{}",
-        vendors, s.mockgen_rate_per_s, s.mockgen_target_host, s.mockgen_target_port,
+        vendors,
+        s.mockgen_rate_per_s,
+        s.mockgen_target_host,
+        s.mockgen_target_port,
     )
     while True:
         v = random.choice(vendors)

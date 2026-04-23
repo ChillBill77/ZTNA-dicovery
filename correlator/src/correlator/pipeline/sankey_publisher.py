@@ -58,16 +58,28 @@ class SankeyPublisher:
             left = f"ip:{f.src_ip}"
             right = f"app:{f.candidate.label}"
             key = (left, right)
-            link = links.setdefault(key, {
-                "src": left, "dst": right, "bytes": 0, "flows": 0, "users": 0,
-            })
+            link = links.setdefault(
+                key,
+                {
+                    "src": left,
+                    "dst": right,
+                    "bytes": 0,
+                    "flows": 0,
+                    "users": 0,
+                },
+            )
             link["bytes"] += f.bytes
             link["flows"] += f.flow_count
             nodes_left.setdefault(left, {"id": left, "label": f.src_ip, "size": 0})
             nodes_left[left]["size"] += 1
-            nodes_right.setdefault(right, {
-                "id": right, "label": f.candidate.label, "kind": f.candidate.label_kind,
-            })
+            nodes_right.setdefault(
+                right,
+                {
+                    "id": right,
+                    "label": f.candidate.label,
+                    "kind": f.candidate.label_kind,
+                },
+            )
             lossy = lossy or f.lossy
             dropped += f.dropped_count
         delta = {
@@ -84,5 +96,5 @@ class SankeyPublisher:
             # Store latest delta for mode=live REST reads.
             await self.redis.set("sankey.last", serialized)
             await self.redis.publish(self.channel, serialized)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("sankey publish failed: {}", exc)

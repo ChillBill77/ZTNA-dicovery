@@ -7,7 +7,7 @@ from dataclasses import dataclass
 class SaasRow:
     id: int
     name: str
-    pattern: str    # suffix, typically starts with '.'
+    pattern: str  # suffix, typically starts with '.'
     priority: int = 100
 
 
@@ -16,9 +16,7 @@ class SaasMatcher:
 
     def __init__(self, rows: list[SaasRow]) -> None:
         # Sort rows once so `match` can short-circuit on the first hit.
-        self._rows = sorted(
-            rows, key=lambda r: (-r.priority, -len(r.pattern), r.id)
-        )
+        self._rows = sorted(rows, key=lambda r: (-r.priority, -len(r.pattern), r.id))
 
     def match(self, fqdn: str) -> SaasRow | None:
         lower = fqdn.lower()

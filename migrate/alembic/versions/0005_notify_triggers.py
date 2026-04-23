@@ -3,6 +3,7 @@
 Revision ID: 0005
 Revises: 0004
 """
+
 from __future__ import annotations
 
 from alembic import op
@@ -14,8 +15,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    for table, channel in (("applications", "applications_changed"),
-                           ("saas_catalog", "saas_changed")):
+    for table, channel in (
+        ("applications", "applications_changed"),
+        ("saas_catalog", "saas_changed"),
+    ):
         op.execute(f"""
             CREATE OR REPLACE FUNCTION _notify_{table}() RETURNS trigger AS $$
             BEGIN

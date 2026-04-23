@@ -13,7 +13,7 @@ from redis.asyncio import Redis
 @dataclass
 class ClientState:
     send: Callable[[str], Awaitable[None]]
-    filters: dict = field(default_factory=dict)   # src_cidr, dst_app, proto, deny_only
+    filters: dict = field(default_factory=dict)  # src_cidr, dst_app, proto, deny_only
 
     def matches(self, link: dict) -> bool:
         src_cidr = self.filters.get("src_cidr")
@@ -25,9 +25,7 @@ class ClientState:
             except ValueError:
                 return False
         dst_app = self.filters.get("dst_app")
-        if dst_app and link["dst"] != f"app:{dst_app}":
-            return False
-        return True
+        return not (dst_app and link["dst"] != f"app:{dst_app}")
 
 
 class SankeyFanout:
@@ -59,15 +57,15 @@ class SankeyFanout:
                     continue
                 try:
                     payload = json.loads(msg["data"])
-                except Exception:  # noqa: BLE001
+                except Exception:
                     continue
                 await self._dispatch(payload)
 
     async def _dispatch(self, delta: dict) -> None:
         for c in list(self._clients):
-            filtered = {**delta, "links": [l for l in delta["links"] if c.matches(l)]}
+            filtered = {**delta, "links": [lk for lk in delta["links"] if c.matches(lk)]}
             try:
                 await c.send(json.dumps(filtered))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.debug("ws send failed, dropping client: {}", exc)
                 self.remove_client(c)

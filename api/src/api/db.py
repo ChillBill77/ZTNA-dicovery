@@ -11,7 +11,7 @@ _session_maker: async_sessionmaker[AsyncSession] | None = None
 
 
 def init_engine(settings: Settings) -> None:
-    global _engine, _session_maker
+    global _engine, _session_maker  # noqa: PLW0603 — module-level singletons
     _engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     _session_maker = async_sessionmaker(_engine, expire_on_commit=False)
 
@@ -30,5 +30,5 @@ async def ping_db() -> bool:
         async with _engine.connect() as conn:
             await conn.exec_driver_sql("SELECT 1")
         return True
-    except Exception:  # noqa: BLE001 — health check is best-effort
+    except Exception:
         return False

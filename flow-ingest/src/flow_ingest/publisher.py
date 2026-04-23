@@ -17,6 +17,7 @@ def _jsonify(event: FlowEvent) -> str:
         if isinstance(o, datetime):
             return o.isoformat()
         raise TypeError(repr(o))
+
     return json.dumps(event, default=default, separators=(",", ":"))
 
 
@@ -51,13 +52,14 @@ class RedisFlowPublisher:
         pipe = self.redis.pipeline(transaction=False)
         for payload in self._buf:
             if self.maxlen_approx is not None:
-                pipe.xadd(self.stream, {"event": payload},
-                          maxlen=self.maxlen_approx, approximate=True)
+                pipe.xadd(
+                    self.stream, {"event": payload}, maxlen=self.maxlen_approx, approximate=True
+                )
             else:
                 pipe.xadd(self.stream, {"event": payload})
         try:
             await pipe.execute()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("redis XADD failed: {}", exc)
             raise
         finally:

@@ -21,7 +21,7 @@ async def adapters() -> list[AdapterHealth]:
         if raw:
             try:
                 out.append(AdapterHealth(**json.loads(raw)))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
     return out
 
@@ -33,6 +33,6 @@ async def stats() -> Stats:
     if raw:
         try:
             return Stats(**json.loads(raw))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return Stats()

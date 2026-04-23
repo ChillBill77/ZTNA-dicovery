@@ -50,8 +50,10 @@ class FortiGateAdapter(FlowAdapter):
         try:
             return FlowEvent(
                 ts=datetime.now(UTC),
-                src_ip=kv["srcip"], src_port=int(kv.get("srcport", 0)),
-                dst_ip=kv["dstip"], dst_port=int(kv.get("dstport", 0)),
+                src_ip=kv["srcip"],
+                src_port=int(kv.get("srcport", 0)),
+                dst_ip=kv["dstip"],
+                dst_port=int(kv.get("dstport", 0)),
                 proto=int(kv.get("proto", 0)),
                 bytes=int(kv.get("sentbyte", 0)) + int(kv.get("rcvdbyte", 0)),
                 packets=int(kv.get("sentpkt", 0)) + int(kv.get("rcvdpkt", 0)),
@@ -71,7 +73,7 @@ class FortiGateAdapter(FlowAdapter):
                 continue
             try:
                 ev = self.parse_line(raw)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.debug("fortigate parse error: {}", exc)
                 continue
             if ev is None:

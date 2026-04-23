@@ -6,7 +6,12 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM", "PL", "RUF"]
 ignore = ["PLR0913"]
 
 [lint.per-file-ignores]
-"tests/*" = ["PLR2004", "S101"]
+"**/tests/**" = ["PLR2004", "S101", "E741", "PLW0108", "RUF059", "PLC0415"]
+"**/tests/*" = ["PLR2004", "S101", "E741", "PLW0108", "RUF059", "PLC0415"]
+"tests/*" = ["PLR2004", "S101", "E741", "PLW0108", "RUF059", "PLC0415"]
+# FastAPI routes use Depends/Query in defaults by design.
+"api/src/api/routers/*.py" = ["B008"]
+"api/src/api/dependencies.py" = ["B008"]
 
 [format]
 quote-style = "double"

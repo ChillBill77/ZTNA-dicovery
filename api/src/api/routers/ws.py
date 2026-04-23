@@ -13,7 +13,7 @@ _fanout: SankeyFanout | None = None
 
 
 async def startup() -> None:
-    global _fanout
+    global _fanout  # noqa: PLW0603 — lifespan-managed singleton
     _fanout = SankeyFanout(redis=redis_client())
     await _fanout.start()
 
@@ -43,7 +43,7 @@ async def ws_sankey(ws: WebSocket) -> None:
                 msg = json.loads(raw)
                 if "filter" in msg:
                     client.filters = msg["filter"]
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
     except WebSocketDisconnect:
         pass

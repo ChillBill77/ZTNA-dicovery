@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from loguru import logger
 
@@ -59,7 +60,7 @@ class FlowWindower:
     def _bucket_start(self, ts: datetime) -> datetime:
         epoch = int(ts.timestamp())
         aligned = epoch - (epoch % self.window_s)
-        tzinfo = ts.tzinfo or timezone.utc
+        tzinfo = ts.tzinfo or UTC
         return datetime.fromtimestamp(aligned, tz=tzinfo)
 
     async def _emit_ready(self, now: datetime) -> None:
@@ -68,20 +69,26 @@ class FlowWindower:
         for b in sorted(ready):
             for key, acc in self._buckets.pop(b).items():
                 wf = WindowedFlow(
-                    bucket_start=b, window_s=self.window_s,
-                    src_ip=key.src_ip, dst_ip=key.dst_ip,
-                    dst_port=key.dst_port, proto=key.proto,
-                    bytes=acc.bytes, packets=acc.packets, flow_count=acc.flow_count,
-                    app_id=acc.app_id_seen, fqdn=acc.fqdn_seen, action=acc.action_seen,
-                    lossy=self._dropped > 0, dropped_count=self._dropped,
+                    bucket_start=b,
+                    window_s=self.window_s,
+                    src_ip=key.src_ip,
+                    dst_ip=key.dst_ip,
+                    dst_port=key.dst_port,
+                    proto=key.proto,
+                    bytes=acc.bytes,
+                    packets=acc.packets,
+                    flow_count=acc.flow_count,
+                    app_id=acc.app_id_seen,
+                    fqdn=acc.fqdn_seen,
+                    action=acc.action_seen,
+                    lossy=self._dropped > 0,
+                    dropped_count=self._dropped,
                 )
                 try:
                     self.out.put_nowait(wf)
                 except asyncio.QueueFull:
-                    try:
+                    with contextlib.suppress(asyncio.QueueEmpty):
                         _ = self.out.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
                     self._dropped += 1
                     try:
                         self.out.put_nowait(wf)
@@ -94,8 +101,8 @@ class FlowWindower:
         while True:
             try:
                 ev = await asyncio.wait_for(self.inp.get(), timeout=self.tick_s)
-            except asyncio.TimeoutError:
-                await self._emit_ready(datetime.now(tz=timezone.utc))
+            except TimeoutError:
+                await self._emit_ready(datetime.now(tz=UTC))
                 continue
             ts: datetime = ev["ts"]
             bucket = self._bucket_start(ts)

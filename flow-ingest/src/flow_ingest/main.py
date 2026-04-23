@@ -45,7 +45,9 @@ async def _run(settings: IngestSettings) -> None:
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     publisher = RedisFlowPublisher(redis=redis)
     receiver = SyslogReceiver(
-        host=settings.syslog_host, port=settings.syslog_port, queue_max=settings.queue_max,
+        host=settings.syslog_host,
+        port=settings.syslog_port,
+        queue_max=settings.queue_max,
     )
     await receiver.start()
 
@@ -63,6 +65,7 @@ async def _run(settings: IngestSettings) -> None:
 
     def _signal() -> None:
         stop.set()
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _signal)

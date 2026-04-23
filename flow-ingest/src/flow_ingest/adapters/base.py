@@ -15,10 +15,10 @@ class FlowEvent(TypedDict):
     proto: int
     bytes: int
     packets: int
-    action: str            # 'allow' | 'deny' | 'drop'
-    fqdn: str | None       # firewall-supplied hostname
-    app_id: str | None     # vendor App-ID
-    source: str            # adapter name, e.g. 'palo_alto'
+    action: str  # 'allow' | 'deny' | 'drop'
+    fqdn: str | None  # firewall-supplied hostname
+    app_id: str | None  # vendor App-ID
+    source: str  # adapter name, e.g. 'palo_alto'
     raw_id: str | None
 
 
@@ -32,7 +32,7 @@ class FlowAdapter(ABC):
     @abstractmethod
     async def run(self) -> AsyncIterator[FlowEvent]:  # pragma: no cover - abstract
         raise NotImplementedError
-        yield  # noqa: E1101 — make the type checker see an async generator
+        yield
 
     @abstractmethod
     def healthcheck(self) -> dict[str, object]:  # pragma: no cover - abstract

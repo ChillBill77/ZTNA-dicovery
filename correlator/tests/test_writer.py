@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from correlator.pipeline.windower import WindowedFlow
 from correlator.pipeline.writer import Writer
 
@@ -13,9 +12,17 @@ from correlator.pipeline.writer import Writer
 def _wf() -> WindowedFlow:
     return WindowedFlow(
         bucket_start=datetime(2026, 4, 22, 14, 12, 0, tzinfo=UTC),
-        window_s=5, src_ip="10.0.0.1", dst_ip="1.1.1.1",
-        dst_port=443, proto=6, bytes=100, packets=2, flow_count=1,
-        app_id=None, fqdn=None, action="allow",
+        window_s=5,
+        src_ip="10.0.0.1",
+        dst_ip="1.1.1.1",
+        dst_port=443,
+        proto=6,
+        bytes=100,
+        packets=2,
+        flow_count=1,
+        app_id=None,
+        fqdn=None,
+        action="allow",
     )
 
 

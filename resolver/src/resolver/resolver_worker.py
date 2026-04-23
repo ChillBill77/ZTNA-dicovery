@@ -25,9 +25,7 @@ class _TokenBucket:
     async def take(self) -> None:
         async with self._lock:
             now = time.monotonic()
-            self._tokens = min(
-                self._capacity, self._tokens + (now - self._last) * self._rate
-            )
+            self._tokens = min(self._capacity, self._tokens + (now - self._last) * self._rate)
             self._last = now
             if self._tokens < 1.0:
                 wait = (1.0 - self._tokens) / self._rate
@@ -41,7 +39,7 @@ class _TokenBucket:
 @dataclass
 class ResolverWorker:
     redis: Redis
-    dns_resolver: object            # `asyncio.DefaultResolver()` in prod
+    dns_resolver: object  # `asyncio.DefaultResolver()` in prod
     saas: SaasMatcher
     pg_upsert: PgUpsert
     rate_per_s: float = 50.0
@@ -60,7 +58,7 @@ class ResolverWorker:
         try:
             info = await self.dns_resolver.gethostbyaddr(ip)  # type: ignore[attr-defined]
             name = info.name or ""
-        except Exception as exc:  # noqa: BLE001 - DNS failures expected
+        except Exception as exc:
             logger.debug("PTR lookup failed for {}: {}", ip, exc)
             name = ""
         await self.redis.set(f"dns:ptr:{ip}", name, ex=self.ptr_ttl_s)
@@ -78,5 +76,5 @@ class ResolverWorker:
             _k, ip = item
             try:
                 await self.process_one(ip)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("resolver error for {}: {}", ip, exc)

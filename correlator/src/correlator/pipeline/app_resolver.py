@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+import asyncpg
 from loguru import logger
 from redis.asyncio import Redis
 
@@ -63,13 +65,13 @@ class AppResolver:
             manual,
             key=lambda a: (-a.priority, -ipaddress.ip_network(a.cidr).prefixlen),
         )
-        self._saas_sorted = sorted(
-            saas, key=lambda s: (-s.priority, -len(s.pattern), s.id)
-        )
+        self._saas_sorted = sorted(saas, key=lambda s: (-s.priority, -len(s.pattern), s.id))
         self._port_defaults = {(p.port, p.proto): p for p in port_defaults}
         logger.info(
             "app-resolver loaded manual={} saas={} ports={}",
-            len(self._manual), len(self._saas_sorted), len(self._port_defaults),
+            len(self._manual),
+            len(self._saas_sorted),
+            len(self._port_defaults),
         )
 
     def _manual_hit(self, ip: str, port: int, proto: int) -> ManualApp | None:
@@ -139,20 +141,26 @@ class AppResolver:
 async def listen_for_reload(
     resolver: AppResolver,
     dsn: str,
-    reload_fn,
+    reload_fn: Callable[[], None],
 ) -> None:
     """Background task: LISTEN on Postgres for config changes and call reload_fn()
     to rebuild resolver state. Registered from `main.py`. Implementer uses asyncpg
-    `connection.add_listener` for `applications_changed` + `saas_changed`."""
-    import asyncpg
+    `connection.add_listener` for `applications_changed` + `saas_changed`.
+
+    The callback triggers `reload_fn` which queries Postgres, constructs the
+    cache rows, and calls `resolver.load(...)`. The full callback body is wired
+    in main.py where the asyncpg pool + queries live; this helper exists so
+    tests can monkey-patch it out.
+    """
+    del resolver  # resolver is used only by reload_fn's closure
     conn = await asyncpg.connect(dsn)
+
+    def _cb(*_args: object) -> None:
+        reload_fn()
+
     try:
-        await conn.add_listener("applications_changed", lambda *_: None)
-        await conn.add_listener("saas_changed", lambda *_: None)
-        # Implementation detail: the callback above triggers `reload_fn` which
-        # queries Postgres, constructs the cache rows, and calls `resolver.load(...)`.
-        # The full callback body is wired in main.py where asyncpg pool + queries
-        # live; this helper exists so tests can monkey-patch it out.
+        await conn.add_listener("applications_changed", _cb)
+        await conn.add_listener("saas_changed", _cb)
         while True:
             await asyncio.sleep(3600)  # heartbeat; listener fires independently.
     finally:

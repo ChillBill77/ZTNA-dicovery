@@ -12,7 +12,7 @@ class NodeLeft(BaseModel):
 class NodeRight(BaseModel):
     id: str
     label: str
-    kind: str   # saas | ptr | port | raw | manual
+    kind: str  # saas | ptr | port | raw | manual
 
 
 class Link(BaseModel):

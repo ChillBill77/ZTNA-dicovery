@@ -4,16 +4,32 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from correlator.pipeline.windower import FlowWindower, WindowedFlow
 
 
-def _ev(t: datetime, src: str = "10.0.0.1", dst: str = "1.1.1.1",
-        port: int = 443, proto: int = 6, b: int = 100, p: int = 1) -> dict:
+def _ev(
+    t: datetime,
+    src: str = "10.0.0.1",
+    dst: str = "1.1.1.1",
+    port: int = 443,
+    proto: int = 6,
+    b: int = 100,
+    p: int = 1,
+) -> dict:
     return {
-        "ts": t, "src_ip": src, "src_port": 1234, "dst_ip": dst, "dst_port": port,
-        "proto": proto, "bytes": b, "packets": p, "action": "allow",
-        "fqdn": None, "app_id": None, "source": "palo_alto", "raw_id": None,
+        "ts": t,
+        "src_ip": src,
+        "src_port": 1234,
+        "dst_ip": dst,
+        "dst_port": port,
+        "proto": proto,
+        "bytes": b,
+        "packets": p,
+        "action": "allow",
+        "fqdn": None,
+        "app_id": None,
+        "source": "palo_alto",
+        "raw_id": None,
     }
 
 

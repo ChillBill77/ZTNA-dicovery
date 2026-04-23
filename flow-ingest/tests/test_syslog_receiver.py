@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from flow_ingest.syslog_receiver import SyslogReceiver
 
 

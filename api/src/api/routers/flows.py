@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -42,10 +42,10 @@ def _filter_links(
             except ValueError:
                 return False
 
-        links = [l for l in links if _in_net(l["src"])]
+        links = [lk for lk in links if _in_net(lk["src"])]
     if dst_app:
         target = f"app:{dst_app}"
-        links = [l for l in links if l["dst"] == target]
+        links = [lk for lk in links if lk["dst"] == target]
     # proto / deny_only filtering is a noop in P2 (not carried on aggregated delta);
     # TODO(P3/P4): enrich SankeyDelta with per-link proto + action rollups.
     return {**delta, "links": links}
@@ -54,7 +54,7 @@ def _filter_links(
 def _truncate(delta: dict, limit: int) -> dict:
     links = delta["links"]
     total = len(links)
-    ranked = sorted(links, key=lambda l: l["bytes"], reverse=True)[:limit]
+    ranked = sorted(links, key=lambda lk: lk["bytes"], reverse=True)[:limit]
     return {**delta, "links": ranked, "truncated": total > limit, "total_links": total}
 
 
@@ -75,16 +75,25 @@ async def sankey(
     if mode == "live":
         redis = redis_client()
         raw = await redis.get(LIVE_KEY)
-        base = json.loads(raw) if raw else {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "window_s": 5, "nodes_left": [], "nodes_right": [], "links": [],
-            "lossy": False, "dropped_count": 0,
-        }
+        base = (
+            json.loads(raw)
+            if raw
+            else {
+                "ts": datetime.now(UTC).isoformat(),
+                "window_s": 5,
+                "nodes_left": [],
+                "nodes_right": [],
+                "links": [],
+                "lossy": False,
+                "dropped_count": 0,
+            }
+        )
     else:
         if from_ts is None or to_ts is None:
             raise HTTPException(status_code=400, detail="from/to required for historical")
-        result = await session.execute(text(
-            """
+        result = await session.execute(
+            text(
+                """
             SELECT src_ip::text AS src_ip, dst_ip::text AS dst_ip, dst_port, proto,
                    sum(bytes) AS bytes, sum(packets) AS packets,
                    sum(flow_count) AS flow_count
@@ -92,33 +101,47 @@ async def sankey(
             WHERE bucket >= :from_ts AND bucket < :to_ts
             GROUP BY src_ip, dst_ip, dst_port, proto
             """
-        ), {"from_ts": from_ts, "to_ts": to_ts})
+            ),
+            {"from_ts": from_ts, "to_ts": to_ts},
+        )
         rows = result.mappings().all()
         # In P2 the historical path uses raw src_ip → ip:port right-column label.
         links: list[dict] = [
             {
                 "src": f"ip:{r['src_ip']}",
                 "dst": f"app:{r['dst_ip']}:{r['dst_port']}",
-                "bytes": int(r["bytes"]), "flows": int(r["flow_count"]), "users": 0,
-            } for r in rows
+                "bytes": int(r["bytes"]),
+                "flows": int(r["flow_count"]),
+                "users": 0,
+            }
+            for r in rows
         ]
         base = {
-            "ts": (from_ts or datetime.now(timezone.utc)).isoformat(),
+            "ts": (from_ts or datetime.now(UTC)).isoformat(),
             "window_s": int((to_ts - from_ts).total_seconds()) if from_ts and to_ts else 0,
-            "nodes_left": [], "nodes_right": [], "links": links,
-            "lossy": False, "dropped_count": 0,
+            "nodes_left": [],
+            "nodes_right": [],
+            "links": links,
+            "lossy": False,
+            "dropped_count": 0,
         }
 
     filtered = _filter_links(
-        base, src_cidr=src_cidr, dst_app=dst_app, category=category,
-        proto=proto, deny_only=deny_only,
+        base,
+        src_cidr=src_cidr,
+        dst_app=dst_app,
+        category=category,
+        proto=proto,
+        deny_only=deny_only,
     )
     truncated = _truncate(filtered, limit)
     # Ensure node lists include only referenced ids
-    used_left = {l["src"] for l in truncated["links"]}
-    used_right = {l["dst"] for l in truncated["links"]}
+    used_left = {lk["src"] for lk in truncated["links"]}
+    used_right = {lk["dst"] for lk in truncated["links"]}
     truncated["nodes_left"] = [n for n in truncated.get("nodes_left", []) if n["id"] in used_left]
-    truncated["nodes_right"] = [n for n in truncated.get("nodes_right", []) if n["id"] in used_right]
+    truncated["nodes_right"] = [
+        n for n in truncated.get("nodes_right", []) if n["id"] in used_right
+    ]
     return SankeyDelta(**truncated)
 
 
@@ -144,12 +167,14 @@ async def raw(
             "(time, src_ip, dst_ip, dst_port) < "
             "(:cur_time, :cur_src_ip::inet, :cur_dst_ip::inet, :cur_dst_port)"
         )
-        params.update({
-            "cur_time": cur.last_time,
-            "cur_src_ip": cur.last_src_ip,
-            "cur_dst_ip": cur.last_dst_ip,
-            "cur_dst_port": cur.last_dst_port,
-        })
+        params.update(
+            {
+                "cur_time": cur.last_time,
+                "cur_src_ip": cur.last_src_ip,
+                "cur_dst_ip": cur.last_dst_ip,
+                "cur_dst_port": cur.last_dst_port,
+            }
+        )
     if src_ip:
         conds.append("src_ip = :src_ip::inet")
         params["src_ip"] = src_ip
@@ -181,10 +206,14 @@ async def raw(
     next_cursor: str | None = None
     if len(rows) > limit:
         extra = rows.pop()  # the n+1 row becomes cursor anchor
-        next_cursor = encode_cursor(CursorPayload(
-            last_time=extra["time"], last_src_ip=extra["src_ip"],
-            last_dst_ip=extra["dst_ip"], last_dst_port=extra["dst_port"],
-        ))
+        next_cursor = encode_cursor(
+            CursorPayload(
+                last_time=extra["time"],
+                last_src_ip=extra["src_ip"],
+                last_dst_ip=extra["dst_ip"],
+                last_dst_port=extra["dst_port"],
+            )
+        )
 
     items = [RawFlow(**r) for r in rows]
     return RawFlowsPage(items=items, next_cursor=next_cursor, total_est=None)

@@ -25,8 +25,15 @@ class Writer:
                 table_name="flows",
                 records=rows,
                 columns=[
-                    "time", "src_ip", "dst_ip", "dst_port", "proto",
-                    "bytes", "packets", "flow_count", "source",
+                    "time",
+                    "src_ip",
+                    "dst_ip",
+                    "dst_port",
+                    "proto",
+                    "bytes",
+                    "packets",
+                    "flow_count",
+                    "source",
                 ],
             )
 
@@ -37,15 +44,24 @@ class Writer:
             timeout = max(0.0, deadline - time.monotonic())
             try:
                 wf: WindowedFlow = await asyncio.wait_for(self.inp.get(), timeout=timeout)
-                buf.append((
-                    wf.bucket_start, wf.src_ip, wf.dst_ip, wf.dst_port, wf.proto,
-                    wf.bytes, wf.packets, wf.flow_count, "correlator",
-                ))
+                buf.append(
+                    (
+                        wf.bucket_start,
+                        wf.src_ip,
+                        wf.dst_ip,
+                        wf.dst_port,
+                        wf.proto,
+                        wf.bytes,
+                        wf.packets,
+                        wf.flow_count,
+                        "correlator",
+                    )
+                )
                 if len(buf) >= self.batch_size:
                     await self._flush_safe(buf)
                     buf = []
                     deadline = time.monotonic() + self.flush_ms / 1000
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if buf:
                     await self._flush_safe(buf)
                     buf = []
@@ -54,5 +70,5 @@ class Writer:
     async def _flush_safe(self, buf: list[tuple]) -> None:
         try:
             await self._flush(buf)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("writer flush failed; dropping {} rows: {}", len(buf), exc)

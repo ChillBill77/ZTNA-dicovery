@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import signal
 from datetime import datetime
@@ -23,18 +24,22 @@ from correlator.settings import CorrelatorSettings
 
 
 async def _read_xstream_into(
-    redis: Redis, stream: str, out: asyncio.Queue, group: str = "correlator",
+    redis: Redis,
+    stream: str,
+    out: asyncio.Queue,
+    group: str = "correlator",
 ) -> None:
     # Ensure group exists
-    try:
+    with contextlib.suppress(Exception):  # group already exists
         await redis.xgroup_create(stream, group, id="0", mkstream=True)
-    except Exception:  # group already exists
-        pass
     consumer = "c1"
     while True:
         entries = await redis.xreadgroup(
-            groupname=group, consumername=consumer,
-            streams={stream: ">"}, count=500, block=1000,
+            groupname=group,
+            consumername=consumer,
+            streams={stream: ">"},
+            count=500,
+            block=1000,
         )
         for _s, msgs in entries:
             for msg_id, fields in msgs:
@@ -42,7 +47,7 @@ async def _read_xstream_into(
                     ev = json.loads(fields["event"])
                     # ts back to datetime
                     ev["ts"] = datetime.fromisoformat(ev["ts"])
-                except Exception:  # noqa: BLE001
+                except Exception:
                     await redis.xack(stream, group, msg_id)
                     continue
                 await out.put(ev)
@@ -50,20 +55,32 @@ async def _read_xstream_into(
 
 
 async def _label_stage(
-    inp: asyncio.Queue, out: asyncio.Queue, resolver: AppResolver,
+    inp: asyncio.Queue,
+    out: asyncio.Queue,
+    resolver: AppResolver,
 ) -> None:
     while True:
         wf: WindowedFlow = await inp.get()
         cand = await resolver.resolve(
-            dst_ip=wf.dst_ip, dst_port=wf.dst_port, proto=wf.proto,
-            firewall_fqdn=wf.fqdn, app_id=wf.app_id,
+            dst_ip=wf.dst_ip,
+            dst_port=wf.dst_port,
+            proto=wf.proto,
+            firewall_fqdn=wf.fqdn,
+            app_id=wf.app_id,
         )
         lf = LabelledFlow(
-            bucket_start=wf.bucket_start, window_s=wf.window_s,
-            src_ip=wf.src_ip, dst_ip=wf.dst_ip,
-            dst_port=wf.dst_port, proto=wf.proto,
-            bytes=wf.bytes, packets=wf.packets, flow_count=wf.flow_count,
-            candidate=cand, lossy=wf.lossy, dropped_count=wf.dropped_count,
+            bucket_start=wf.bucket_start,
+            window_s=wf.window_s,
+            src_ip=wf.src_ip,
+            dst_ip=wf.dst_ip,
+            dst_port=wf.dst_port,
+            proto=wf.proto,
+            bytes=wf.bytes,
+            packets=wf.packets,
+            flow_count=wf.flow_count,
+            candidate=cand,
+            lossy=wf.lossy,
+            dropped_count=wf.dropped_count,
         )
         await out.put(lf)
 
@@ -78,9 +95,7 @@ async def _load_app_resolver(resolver: AppResolver, pool: asyncpg.Pool) -> None:
         saas_rows = await conn.fetch(
             "SELECT id, name, fqdn_pattern AS pattern, priority FROM saas_catalog"
         )
-        port_rows = await conn.fetch(
-            "SELECT port, proto, name FROM port_defaults"
-        )
+        port_rows = await conn.fetch("SELECT port, proto, name FROM port_defaults")
     resolver.load(
         manual=[ManualApp(**dict(r)) for r in manual_rows],
         saas=[SaasEntry(**dict(r)) for r in saas_rows],
@@ -90,9 +105,15 @@ async def _load_app_resolver(resolver: AppResolver, pool: asyncpg.Pool) -> None:
 
 async def _listen_reload(pool: asyncpg.Pool, resolver: AppResolver, dsn: str) -> None:
     conn = await asyncpg.connect(dsn)
+    # Hold references to spawned reload tasks so they aren't GC'd mid-flight.
+    _reload_tasks: set[asyncio.Task[None]] = set()
+
+    def _cb(*_args: object) -> None:
+        t = asyncio.create_task(_load_app_resolver(resolver, pool))
+        _reload_tasks.add(t)
+        t.add_done_callback(_reload_tasks.discard)
+
     try:
-        def _cb(*_args):
-            asyncio.create_task(_load_app_resolver(resolver, pool))
         await conn.add_listener("applications_changed", _cb)
         await conn.add_listener("saas_changed", _cb)
         while True:
@@ -102,8 +123,9 @@ async def _listen_reload(pool: asyncpg.Pool, resolver: AppResolver, dsn: str) ->
 
 
 def _as_asyncpg_dsn(url: str) -> str:
-    return url.replace("postgresql+asyncpg://", "postgresql://") \
-              .replace("postgresql+psycopg://", "postgresql://")
+    return url.replace("postgresql+asyncpg://", "postgresql://").replace(
+        "postgresql+psycopg://", "postgresql://"
+    )
 
 
 async def _demux(src: asyncio.Queue, *dsts: asyncio.Queue) -> None:
@@ -113,14 +135,10 @@ async def _demux(src: asyncio.Queue, *dsts: asyncio.Queue) -> None:
             try:
                 d.put_nowait(item)
             except asyncio.QueueFull:
-                try:
+                with contextlib.suppress(asyncio.QueueEmpty):
                     _ = d.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                try:
+                with contextlib.suppress(asyncio.QueueFull):
                     d.put_nowait(item)
-                except asyncio.QueueFull:
-                    pass
 
 
 async def _run(settings: CorrelatorSettings) -> None:
@@ -138,18 +156,18 @@ async def _run(settings: CorrelatorSettings) -> None:
     intermediate_q: asyncio.Queue = asyncio.Queue(maxsize=settings.queue_max)
 
     windower = FlowWindower(inp=raw_q, out=windowed_q, window_s=settings.window_s)
-    writer = Writer(inp=labelled_q_writer, pool=pool,
-                    batch_size=settings.batch_size, flush_ms=settings.flush_ms)
+    writer = Writer(
+        inp=labelled_q_writer, pool=pool, batch_size=settings.batch_size, flush_ms=settings.flush_ms
+    )
     sankey_pub = SankeyPublisher(inp=labelled_q_sankey, redis=redis)
 
     tasks = [
-        asyncio.create_task(_read_xstream_into(redis, settings.flows_stream, raw_q),
-                            name="xread"),
+        asyncio.create_task(_read_xstream_into(redis, settings.flows_stream, raw_q), name="xread"),
         asyncio.create_task(windower.run(), name="windower"),
-        asyncio.create_task(_label_stage(windowed_q, intermediate_q, resolver),
-                            name="labeller"),
-        asyncio.create_task(_demux(intermediate_q, labelled_q_writer, labelled_q_sankey),
-                            name="demux"),
+        asyncio.create_task(_label_stage(windowed_q, intermediate_q, resolver), name="labeller"),
+        asyncio.create_task(
+            _demux(intermediate_q, labelled_q_writer, labelled_q_sankey), name="demux"
+        ),
         asyncio.create_task(writer.run(), name="writer"),
         asyncio.create_task(sankey_pub.run(), name="sankey-pub"),
         asyncio.create_task(_listen_reload(pool, resolver, dsn), name="reload"),

@@ -15,6 +15,15 @@ from flow_ingest.syslog_receiver import SyslogReceiver
 
 _PROTO_BY_NAME: dict[str, int] = {"tcp": 6, "udp": 17, "icmp": 1}
 
+# PAN-OS TRAFFIC CSV minimum column count we rely on (bytes + packets are at
+# indices 31 and 32; anything shorter isn't a usable TRAFFIC row).
+_MIN_PAN_CSV_FIELDS = 32
+# Minimum pipe-segments in a LEEF 2.0 envelope before extension fields.
+_MIN_LEEF_PIPES = 6
+# Index of the generated_time column in PAN-OS TRAFFIC CSV (0-based). Used to
+# guard the timestamp lookup against short rows.
+_PAN_GENERATED_TIME_IDX = 6
+
 
 def _proto(val: str) -> int:
     val = val.strip().lower()
@@ -48,7 +57,7 @@ class PaloAltoAdapter(FlowAdapter):
                 continue
             try:
                 ev = self.parse_line(raw)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.debug("palo_alto parse error: {}", exc)
                 continue
             if ev is None:
@@ -65,15 +74,17 @@ def _parse_csv(line: str) -> FlowEvent | None:
     payload = line.split(": ", 1)[-1] if ": " in line else line
     reader = csv.reader(io.StringIO(payload))
     fields = next(reader, None)
-    if fields is None or len(fields) < 32 or fields[3] != "TRAFFIC":
+    if fields is None or len(fields) < _MIN_PAN_CSV_FIELDS or fields[3] != "TRAFFIC":
         return None
     if fields[4] != "end":
         return None
     try:
         return FlowEvent(
-            ts=_ts(fields[6]) if len(fields) > 6 else datetime.now(UTC),
-            src_ip=fields[7], src_port=int(fields[24] or 0),
-            dst_ip=fields[8], dst_port=int(fields[25] or 0),
+            ts=(_ts(fields[6]) if len(fields) > _PAN_GENERATED_TIME_IDX else datetime.now(UTC)),
+            src_ip=fields[7],
+            src_port=int(fields[24] or 0),
+            dst_ip=fields[8],
+            dst_port=int(fields[25] or 0),
             proto=_proto(fields[29]),
             bytes=int(fields[31] or 0),
             packets=int(fields[32] or 0),
@@ -94,7 +105,7 @@ def _parse_leef(line: str) -> FlowEvent | None:
         return None
     tail = line[leef_start:]
     parts = tail.split("|")
-    if len(parts) < 6:
+    if len(parts) < _MIN_LEEF_PIPES:
         return None
     kvs: dict[str, str] = {}
     for segment in parts[5:]:
@@ -111,8 +122,10 @@ def _parse_leef(line: str) -> FlowEvent | None:
     try:
         return FlowEvent(
             ts=datetime.now(UTC),
-            src_ip=kvs["src"], src_port=int(kvs.get("srcPort", 0)),
-            dst_ip=kvs["dst"], dst_port=int(kvs.get("dstPort", 0)),
+            src_ip=kvs["src"],
+            src_port=int(kvs.get("srcPort", 0)),
+            dst_ip=kvs["dst"],
+            dst_port=int(kvs.get("dstPort", 0)),
             proto=_proto(kvs.get("proto", "tcp")),
             bytes=int(kvs.get("bytesTotal", 0)),
             packets=int(kvs.get("packetsTotal", 0)),
