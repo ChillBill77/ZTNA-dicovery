@@ -1159,11 +1159,1006 @@ Gate: `pytest id-ingest/tests/adapters/` green for AD + Entra; both adapters aut
 
 ---
 
-<!-- CHUNK-3-PLACEHOLDER -->
+## Chunk 3: Cisco ISE + Aruba ClearPass adapters
+
+Two push-based NAC adapters. Both emit the strongest confidence tier (95, spec §4.2) because 802.1X bindings are actively maintained. A RADIUS Accounting `Stop` message must *invalidate* a prior binding; the downstream correlator (Chunk 5) looks for `event_type == "nac-auth-stop"` and evicts the interval.
+
+### Task 3.1: Cisco ISE adapter — fixtures
+
+**Files:**
+- Create: `id-ingest/tests/fixtures/cisco_ise/acct_start.txt`
+- Create: `id-ingest/tests/fixtures/cisco_ise/acct_stop.txt`
+- Create: `id-ingest/tests/fixtures/cisco_ise/session_timeout.txt`
+
+- [ ] **Step 1: Drop three ISE LiveLogs syslog lines**
+
+`acct_start.txt`:
+
+```
+<14>2026-04-22T12:10:00Z ise01 CISE_RADIUS_Accounting 0000012345 1 0 2026-04-22 12:10:00.123 +00:00 1234567 3000 NOTICE Radius-Accounting: RADIUS Accounting start request, ConfigVersionId=123, Device IP Address=10.0.10.1, UserName=alice, NAS-IP-Address=10.0.10.1, NAS-Port=50101, Framed-IP-Address=10.0.12.34, Calling-Station-ID=AA-BB-CC-DD-EE-FF, Acct-Status-Type=Start, Acct-Session-Id=ABCDEF01
+```
+
+`acct_stop.txt` — same schema, `Acct-Status-Type=Stop`.
+`session_timeout.txt` — includes `Session-Timeout=3600`.
+
+- [ ] **Step 2: Commit fixtures**
+
+```bash
+git add id-ingest/tests/fixtures/cisco_ise
+git commit -m "test(cisco_ise): add RADIUS Acct golden fixtures"
+```
 
 ---
 
-<!-- CHUNK-4-PLACEHOLDER -->
+### Task 3.2: Cisco ISE adapter — failing tests
+
+**Files:**
+- Create: `id-ingest/tests/adapters/test_cisco_ise_adapter.py`
+
+- [ ] **Step 1: Write tests**
+
+```python
+from pathlib import Path
+
+import pytest
+
+from id_ingest.adapters.cisco_ise_adapter import CiscoIseAdapter
+
+FIX = Path(__file__).parent.parent / "fixtures" / "cisco_ise"
+
+
+def _adapter() -> CiscoIseAdapter:
+    return CiscoIseAdapter.from_config({})
+
+
+def test_start_event_is_nac_auth_with_95_confidence() -> None:
+    line = (FIX / "acct_start.txt").read_bytes().strip()
+    ev = _adapter().parse(line)
+    assert ev is not None
+    assert ev["source"] == "cisco_ise"
+    assert ev["event_type"] == "nac-auth"
+    assert ev["user_upn"] == "alice"
+    assert ev["src_ip"] == "10.0.12.34"
+    assert ev["confidence"] == 95
+    assert ev["ttl_seconds"] == 12 * 3600   # no Session-Timeout → 12h default
+    assert ev["mac"] == "AA-BB-CC-DD-EE-FF"
+
+
+def test_session_timeout_overrides_default_ttl() -> None:
+    line = (FIX / "session_timeout.txt").read_bytes().strip()
+    ev = _adapter().parse(line)
+    assert ev["ttl_seconds"] == 3600
+
+
+def test_stop_event_marks_invalidation() -> None:
+    line = (FIX / "acct_stop.txt").read_bytes().strip()
+    ev = _adapter().parse(line)
+    assert ev["event_type"] == "nac-auth-stop"
+    assert ev["ttl_seconds"] == 0
+```
+
+- [ ] **Step 2: Run, expect ModuleNotFoundError**
+
+Run: `pytest id-ingest/tests/adapters/test_cisco_ise_adapter.py -v`
+Expected: FAIL.
+
+---
+
+### Task 3.3: Cisco ISE adapter — implementation
+
+**Files:**
+- Create: `id-ingest/src/id_ingest/adapters/cisco_ise_adapter.py`
+
+- [ ] **Step 1: Implement**
+
+```python
+from __future__ import annotations
+
+import re
+from datetime import datetime, timezone
+from typing import AsyncIterator
+
+from loguru import logger
+from ztna_common.adapter_base import IdentityAdapter
+from ztna_common.event_types import IdentityEvent
+from ztna_common.syslog_receiver import SyslogReceiver
+
+_KV = re.compile(r"(?P<k>[A-Za-z][A-Za-z0-9-]*)\s*=\s*(?P<v>[^,]+)")
+DEFAULT_TTL = 12 * 3600
+
+
+class CiscoIseAdapter(IdentityAdapter):
+    name = "cisco_ise"
+
+    def __init__(self, bind: str = "0.0.0.0", port: int = 517) -> None:
+        self._recv = SyslogReceiver(bind=bind, port=port, name="cisco_ise")
+
+    @classmethod
+    def from_config(cls, cfg: dict[str, object]) -> "CiscoIseAdapter":
+        return cls(bind=str(cfg.get("bind", "0.0.0.0")), port=int(cfg.get("port", 517)))
+
+    def parse(self, line: bytes) -> IdentityEvent | None:
+        try:
+            text = line.decode("utf-8", errors="replace")
+            if "CISE_RADIUS_Accounting" not in text:
+                return None
+            kv = {m["k"]: m["v"].strip() for m in _KV.finditer(text)}
+            status = kv.get("Acct-Status-Type", "")
+            ip = kv.get("Framed-IP-Address")
+            user = kv.get("UserName")
+            if not ip or not user or status not in {"Start", "Stop"}:
+                return None
+            ts = datetime.now(tz=timezone.utc)
+            ttl = 0 if status == "Stop" else int(kv.get("Session-Timeout", DEFAULT_TTL))
+            return IdentityEvent(
+                ts=ts,
+                src_ip=ip,
+                user_upn=user,
+                source=self.name,
+                event_type="nac-auth-stop" if status == "Stop" else "nac-auth",
+                confidence=95,
+                ttl_seconds=ttl,
+                mac=kv.get("Calling-Station-ID"),
+                raw_id=kv.get("Acct-Session-Id"),
+            )
+        except Exception as exc:   # noqa: BLE001
+            logger.warning("cisco_ise parse error: {}", exc)
+            return None
+
+    async def run(self) -> AsyncIterator[IdentityEvent]:
+        async for line in self._recv.stream():
+            ev = self.parse(line)
+            if ev is not None:
+                yield ev
+
+    def healthcheck(self) -> dict[str, object]:
+        return {"adapter": self.name, "listening": self._recv.is_listening}
+```
+
+- [ ] **Step 2: Run tests; expect PASS**
+
+Run: `pytest id-ingest/tests/adapters/test_cisco_ise_adapter.py -v`
+Expected: all three PASS.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add id-ingest/src/id_ingest/adapters/cisco_ise_adapter.py id-ingest/tests/adapters/test_cisco_ise_adapter.py
+git commit -m "feat(id-ingest): Cisco ISE adapter with Start/Stop + Session-Timeout TTL"
+```
+
+---
+
+### Task 3.4: Aruba ClearPass adapter — fixtures
+
+**Files:**
+- Create: `id-ingest/tests/fixtures/clearpass/cef_start.txt`
+- Create: `id-ingest/tests/fixtures/clearpass/cef_stop.txt`
+
+- [ ] **Step 1: Drop two CEF lines**
+
+`cef_start.txt`:
+
+```
+<14>2026-04-22T12:15:00Z cppm01 CEF:0|Aruba Networks|ClearPass|6.11|2001|Accounting-Start|1|src=10.0.20.12 suser=bob@corp.example smac=11:22:33:44:55:66 cs1Label=Service cs1=CORP-WIRED cs2Label=Session-Timeout cs2=7200 externalId=CP-SESSION-987
+```
+
+`cef_stop.txt`:
+
+```
+<14>2026-04-22T12:45:00Z cppm01 CEF:0|Aruba Networks|ClearPass|6.11|2002|Accounting-Stop|1|src=10.0.20.12 suser=bob@corp.example smac=11:22:33:44:55:66 externalId=CP-SESSION-987
+```
+
+- [ ] **Step 2: Commit fixtures**
+
+```bash
+git add id-ingest/tests/fixtures/clearpass
+git commit -m "test(clearpass): add CEF RADIUS Acct golden fixtures"
+```
+
+---
+
+### Task 3.5: Aruba ClearPass adapter — failing tests
+
+**Files:**
+- Create: `id-ingest/tests/adapters/test_aruba_clearpass_adapter.py`
+
+- [ ] **Step 1: Write tests**
+
+```python
+from pathlib import Path
+
+from id_ingest.adapters.aruba_clearpass_adapter import ArubaClearpassAdapter
+
+FIX = Path(__file__).parent.parent / "fixtures" / "clearpass"
+
+
+def test_start_event_emits_nac_auth_at_95() -> None:
+    adapter = ArubaClearpassAdapter.from_config({})
+    line = (FIX / "cef_start.txt").read_bytes().strip()
+    ev = adapter.parse(line)
+    assert ev is not None
+    assert ev["source"] == "aruba_clearpass"
+    assert ev["event_type"] == "nac-auth"
+    assert ev["user_upn"] == "bob@corp.example"
+    assert ev["src_ip"] == "10.0.20.12"
+    assert ev["confidence"] == 95
+    assert ev["ttl_seconds"] == 7200
+    assert ev["mac"] == "11:22:33:44:55:66"
+    assert ev["raw_id"] == "CP-SESSION-987"
+
+
+def test_stop_event_is_invalidating() -> None:
+    adapter = ArubaClearpassAdapter.from_config({})
+    line = (FIX / "cef_stop.txt").read_bytes().strip()
+    ev = adapter.parse(line)
+    assert ev["event_type"] == "nac-auth-stop"
+    assert ev["ttl_seconds"] == 0
+```
+
+- [ ] **Step 2: Run — expect ModuleNotFoundError**
+
+Run: `pytest id-ingest/tests/adapters/test_aruba_clearpass_adapter.py -v`
+Expected: FAIL.
+
+---
+
+### Task 3.6: Aruba ClearPass adapter — implementation
+
+**Files:**
+- Create: `id-ingest/src/id_ingest/adapters/aruba_clearpass_adapter.py`
+
+- [ ] **Step 1: Implement**
+
+```python
+from __future__ import annotations
+
+import re
+from datetime import datetime, timezone
+from typing import AsyncIterator
+
+from loguru import logger
+from ztna_common.adapter_base import IdentityAdapter
+from ztna_common.event_types import IdentityEvent
+from ztna_common.syslog_receiver import SyslogReceiver
+
+DEFAULT_TTL = 12 * 3600
+_CEF_FIELDS = re.compile(r"(?P<k>[a-zA-Z0-9]+)=(?P<v>[^\s]+)")
+_HEADER = re.compile(r"CEF:0\|[^|]+\|ClearPass\|[^|]+\|(?P<sig>\d+)\|(?P<name>[^|]+)\|\d+\|(?P<ext>.*)")
+
+
+class ArubaClearpassAdapter(IdentityAdapter):
+    name = "aruba_clearpass"
+
+    def __init__(self, bind: str = "0.0.0.0", port: int = 518) -> None:
+        self._recv = SyslogReceiver(bind=bind, port=port, name="aruba_clearpass")
+
+    @classmethod
+    def from_config(cls, cfg: dict[str, object]) -> "ArubaClearpassAdapter":
+        return cls(bind=str(cfg.get("bind", "0.0.0.0")), port=int(cfg.get("port", 518)))
+
+    def parse(self, line: bytes) -> IdentityEvent | None:
+        try:
+            text = line.decode("utf-8", errors="replace")
+            m = _HEADER.search(text)
+            if not m:
+                return None
+            name = m.group("name")
+            kv = {f["k"]: f["v"] for f in _CEF_FIELDS.finditer(m.group("ext"))}
+            # ClearPass labels session-timeout in cs2 with cs2Label=Session-Timeout
+            ttl = DEFAULT_TTL
+            if kv.get("cs2Label") == "Session-Timeout" and "cs2" in kv:
+                ttl = int(kv["cs2"])
+            is_stop = "Stop" in name
+            ts = datetime.now(tz=timezone.utc)
+            return IdentityEvent(
+                ts=ts,
+                src_ip=kv["src"],
+                user_upn=kv["suser"],
+                source=self.name,
+                event_type="nac-auth-stop" if is_stop else "nac-auth",
+                confidence=95,
+                ttl_seconds=0 if is_stop else ttl,
+                mac=kv.get("smac"),
+                raw_id=kv.get("externalId"),
+            )
+        except Exception as exc:   # noqa: BLE001
+            logger.warning("aruba_clearpass parse error: {}", exc)
+            return None
+
+    async def run(self) -> AsyncIterator[IdentityEvent]:
+        async for line in self._recv.stream():
+            ev = self.parse(line)
+            if ev is not None:
+                yield ev
+
+    def healthcheck(self) -> dict[str, object]:
+        return {"adapter": self.name, "listening": self._recv.is_listening}
+```
+
+- [ ] **Step 2: Run all adapter tests; expect PASS**
+
+Run: `pytest id-ingest/tests/adapters/ -v`
+Expected: AD + Entra + ISE + ClearPass all green.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add id-ingest/src/id_ingest/adapters/aruba_clearpass_adapter.py id-ingest/tests/adapters/test_aruba_clearpass_adapter.py
+git commit -m "feat(id-ingest): Aruba ClearPass CEF adapter"
+```
+
+---
+
+### Task 3.7: Confirm auto-discovery picks up all four
+
+**Files:**
+- Modify: `id-ingest/tests/test_main.py`
+
+- [ ] **Step 1: Extend auto-discovery test**
+
+```python
+def test_discover_adapters_finds_all_day1_adapters() -> None:
+    from id_ingest.main import discover_adapters
+    names = {cls.name for cls in discover_adapters()}
+    assert names == {"ad_4624", "entra_signin", "cisco_ise", "aruba_clearpass"}
+```
+
+- [ ] **Step 2: Run; expect PASS**
+
+Run: `pytest id-ingest/tests/test_main.py -v`
+Expected: PASS (adapters exist and subclass `IdentityAdapter`).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add id-ingest/tests/test_main.py
+git commit -m "test(id-ingest): assert all four day-1 adapters auto-discovered"
+```
+
+---
+
+**End of Chunk 3.**
+Gate: `pytest id-ingest/` fully green; four adapters registered via auto-discovery; Stop events carry `ttl_seconds=0`.
+
+---
+
+## Chunk 4: `group-sync` worker (AD LDAP + Entra Graph)
+
+Hydrates the `user_groups` table so the correlator can compute LCD. Two branches (AD / Entra), both driven by the same scheduler. Full scan runs nightly (default 02:00 via `full_sync_cron`); on-demand sync is triggered when a new UPN is seen on `identity.events`. After every full cycle the worker issues `REFRESH MATERIALIZED VIEW CONCURRENTLY group_members` and a Postgres `NOTIFY groups_changed` so the correlator reloads its in-memory group index (wired in Chunk 5).
+
+### Task 4.1: AD group sync — failing test with `ldap3.Mock`
+
+**Files:**
+- Create: `id-ingest/tests/group_sync/test_ad_sync.py`
+- Create: `id-ingest/tests/fixtures/ad_ldap/memberof_small.ldif`
+- Create: `id-ingest/tests/fixtures/ad_ldap/memberof_range.ldif`
+
+- [ ] **Step 1: Seed LDIFs**
+
+`memberof_small.ldif` — two users, each with 3 group DNs under `memberOf`.
+`memberof_range.ldif` — one user with `memberOf;range=0-1499` + `memberOf;range=1500-*`, simulating AD's 1500-value chunking. Each chunk carries enough DNs to exercise the pagination loop.
+
+- [ ] **Step 2: Write test**
+
+```python
+from pathlib import Path
+
+import pytest
+from ldap3 import Connection, Server, MOCK_SYNC
+
+from id_ingest.group_sync.ad_sync import AdGroupSync
+
+FIX = Path(__file__).parent.parent / "fixtures" / "ad_ldap"
+
+
+def _mock_conn(ldif: str) -> Connection:
+    srv = Server("mock")
+    conn = Connection(srv, user="cn=svc,dc=example", password="x", client_strategy=MOCK_SYNC)
+    conn.strategy.add_entry(...)  # load LDIF entries — implementation detail in the adapter test helper
+    conn.bind()
+    return conn
+
+
+@pytest.mark.asyncio
+async def test_ad_sync_flattens_transitive_membership(monkeypatch) -> None:
+    sync = AdGroupSync(
+        ldap_url="ldap://mock",
+        bind_dn="cn=svc,dc=example",
+        bind_password="x",
+        base_dn="dc=example",
+        connection_factory=lambda: _mock_conn((FIX / "memberof_small.ldif").read_text()),
+    )
+    upserts = await sync.sync_user("alice@example")
+    # 3 groups resolved, each upsert carries (user_upn, group_id, group_name, group_source='ad')
+    assert len(upserts) == 3
+    sources = {u["group_source"] for u in upserts}
+    assert sources == {"ad"}
+
+
+@pytest.mark.asyncio
+async def test_ad_sync_handles_memberof_range_retrieval() -> None:
+    sync = AdGroupSync(
+        ldap_url="ldap://mock",
+        bind_dn="cn=svc,dc=example",
+        bind_password="x",
+        base_dn="dc=example",
+        connection_factory=lambda: _mock_conn((FIX / "memberof_range.ldif").read_text()),
+    )
+    upserts = await sync.sync_user("carol@example")
+    # chunk 0-1499 + chunk 1500-* flattened
+    assert len(upserts) >= 1500
+```
+
+- [ ] **Step 3: Run, expect ModuleNotFoundError**
+
+Run: `pytest id-ingest/tests/group_sync/test_ad_sync.py -v`
+Expected: FAIL.
+
+---
+
+### Task 4.2: AD group sync — implementation
+
+**Files:**
+- Create: `id-ingest/src/id_ingest/group_sync/__init__.py`
+- Create: `id-ingest/src/id_ingest/group_sync/ad_sync.py`
+
+- [ ] **Step 1: Implement range-retrieval-aware flattener**
+
+```python
+from __future__ import annotations
+
+import asyncio
+import re
+from dataclasses import dataclass
+from typing import Callable, Iterable, TypedDict
+
+from ldap3 import ALL, Connection, SUBTREE, Server
+
+
+class GroupUpsert(TypedDict):
+    user_upn: str
+    group_id: str
+    group_name: str
+    group_source: str
+
+
+_RANGE = re.compile(r"memberOf;range=(?P<lo>\d+)-(?P<hi>\d+|\*)")
+
+
+@dataclass
+class AdGroupSync:
+    ldap_url: str
+    bind_dn: str
+    bind_password: str
+    base_dn: str
+    connection_factory: Callable[[], Connection] | None = None
+
+    def _connect(self) -> Connection:
+        if self.connection_factory:
+            return self.connection_factory()
+        srv = Server(self.ldap_url, get_info=ALL)
+        return Connection(srv, user=self.bind_dn, password=self.bind_password, auto_bind=True)
+
+    def _read_memberof(self, conn: Connection, user_dn: str) -> list[str]:
+        groups: list[str] = []
+        attr = "memberOf"
+        while True:
+            conn.search(user_dn, "(objectClass=user)", SUBTREE, attributes=[attr])
+            if not conn.entries:
+                break
+            entry = conn.entries[0]
+            raw = getattr(entry, attr).values if hasattr(entry, attr) else []
+            groups.extend(raw)
+            # range retrieval
+            ranged_attrs = [k for k in entry.entry_attributes if _RANGE.match(k)]
+            if not ranged_attrs:
+                break
+            m = _RANGE.match(ranged_attrs[0])
+            if m.group("hi") == "*":
+                break
+            attr = f"memberOf;range={int(m.group('hi'))+1}-*"
+        return groups
+
+    async def sync_user(self, user_upn: str) -> list[GroupUpsert]:
+        def _work() -> list[GroupUpsert]:
+            conn = self._connect()
+            # Resolve user DN by sAMAccountName or userPrincipalName match.
+            local = user_upn.split("@", 1)[0]
+            conn.search(self.base_dn, f"(userPrincipalName={user_upn})",
+                        SUBTREE, attributes=["distinguishedName"])
+            if not conn.entries:
+                conn.search(self.base_dn, f"(sAMAccountName={local})",
+                            SUBTREE, attributes=["distinguishedName"])
+            if not conn.entries:
+                return []
+            user_dn = str(conn.entries[0].distinguishedName)
+            dns = self._read_memberof(conn, user_dn)
+            return [
+                GroupUpsert(
+                    user_upn=user_upn,
+                    group_id=dn,
+                    group_name=_cn(dn),
+                    group_source="ad",
+                )
+                for dn in dns
+            ]
+
+        return await asyncio.to_thread(_work)
+
+    async def sync_all(self) -> Iterable[GroupUpsert]:
+        def _enumerate() -> list[str]:
+            conn = self._connect()
+            conn.search(self.base_dn, "(objectClass=user)", SUBTREE, attributes=["userPrincipalName"])
+            return [str(e.userPrincipalName) for e in conn.entries if e.userPrincipalName]
+
+        users = await asyncio.to_thread(_enumerate)
+        for upn in users:
+            for up in await self.sync_user(upn):
+                yield up
+
+
+def _cn(dn: str) -> str:
+    first = dn.split(",", 1)[0]
+    return first.split("=", 1)[1] if "=" in first else first
+```
+
+- [ ] **Step 2: Run tests; expect PASS**
+
+Run: `pytest id-ingest/tests/group_sync/test_ad_sync.py -v`
+Expected: PASS.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add id-ingest/src/id_ingest/group_sync/__init__.py id-ingest/src/id_ingest/group_sync/ad_sync.py id-ingest/tests/group_sync/test_ad_sync.py id-ingest/tests/fixtures/ad_ldap/
+git commit -m "feat(group-sync): AD LDAP memberOf flattener with range retrieval"
+```
+
+---
+
+### Task 4.3: Entra group sync — failing test using `httpx.MockTransport`
+
+**Files:**
+- Create: `id-ingest/tests/group_sync/test_entra_sync.py`
+- Create: `id-ingest/tests/fixtures/graph_groups/transitive_member_of_page1.json`
+- Create: `id-ingest/tests/fixtures/graph_groups/transitive_member_of_page2.json`
+
+- [ ] **Step 1: Seed Graph fixtures**
+
+`transitive_member_of_page1.json`:
+
+```json
+{
+  "@odata.nextLink": "https://graph.microsoft.com/v1.0/users/alice@corp.example/transitiveMemberOf?$skiptoken=abc",
+  "value": [
+    {"@odata.type": "#microsoft.graph.group", "id": "g-sales", "displayName": "Sales EMEA"},
+    {"@odata.type": "#microsoft.graph.group", "id": "g-all",   "displayName": "Everyone"}
+  ]
+}
+```
+
+`transitive_member_of_page2.json`:
+
+```json
+{
+  "value": [
+    {"@odata.type": "#microsoft.graph.group", "id": "g-m365", "displayName": "M365 Licensed"}
+  ]
+}
+```
+
+- [ ] **Step 2: Write test**
+
+```python
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+
+from id_ingest.group_sync.entra_sync import EntraGroupSync
+
+FIX = Path(__file__).parent.parent / "fixtures" / "graph_groups"
+
+
+def _mock() -> httpx.MockTransport:
+    pages = [
+        json.loads((FIX / "transitive_member_of_page1.json").read_text()),
+        json.loads((FIX / "transitive_member_of_page2.json").read_text()),
+    ]
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "oauth2" in request.url.path:
+            return httpx.Response(200, json={"access_token": "x", "expires_in": 3600, "token_type": "Bearer"})
+        page = pages[calls["n"]]
+        calls["n"] += 1
+        return httpx.Response(200, json=page)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_sync_user_returns_flattened_group_list() -> None:
+    sync = EntraGroupSync(tenant_id="tid", client_id="cid", client_secret="sec", transport=_mock())
+    upserts = await sync.sync_user("alice@corp.example")
+    ids = sorted(u["group_id"] for u in upserts)
+    assert ids == ["g-all", "g-m365", "g-sales"]
+    assert all(u["group_source"] == "entra" for u in upserts)
+```
+
+- [ ] **Step 3: Run, expect ModuleNotFoundError**
+
+Run: `pytest id-ingest/tests/group_sync/test_entra_sync.py -v`
+Expected: FAIL.
+
+---
+
+### Task 4.4: Entra group sync — implementation
+
+**Files:**
+- Create: `id-ingest/src/id_ingest/group_sync/entra_sync.py`
+
+- [ ] **Step 1: Implement**
+
+```python
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import httpx
+
+from id_ingest.group_sync.ad_sync import GroupUpsert
+
+GRAPH = "https://graph.microsoft.com/v1.0"
+LOGIN = "https://login.microsoftonline.com"
+
+
+@dataclass
+class EntraGroupSync:
+    tenant_id: str
+    client_id: str
+    client_secret: str
+    transport: httpx.BaseTransport | None = None
+
+    async def _token(self, c: httpx.AsyncClient) -> str:
+        r = await c.post(
+            f"{LOGIN}/{self.tenant_id}/oauth2/v2.0/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "scope": "https://graph.microsoft.com/.default",
+            },
+        )
+        r.raise_for_status()
+        return r.json()["access_token"]
+
+    async def sync_user(self, user_upn: str) -> list[GroupUpsert]:
+        async with httpx.AsyncClient(transport=self.transport, timeout=30.0) as c:
+            tok = await self._token(c)
+            url = f"{GRAPH}/users/{user_upn}/transitiveMemberOf"
+            headers = {"Authorization": f"Bearer {tok}"}
+            out: list[GroupUpsert] = []
+            while url:
+                r = await c.get(url, headers=headers)
+                r.raise_for_status()
+                body = r.json()
+                for g in body.get("value", []):
+                    if g.get("@odata.type") != "#microsoft.graph.group":
+                        continue
+                    out.append(
+                        GroupUpsert(
+                            user_upn=user_upn,
+                            group_id=g["id"],
+                            group_name=g.get("displayName") or g["id"],
+                            group_source="entra",
+                        )
+                    )
+                url = body.get("@odata.nextLink")
+            return out
+
+    async def sync_all(self) -> list[GroupUpsert]:
+        """Enumerate all users then call sync_user; chunked batching lives in the worker."""
+        out: list[GroupUpsert] = []
+        async with httpx.AsyncClient(transport=self.transport, timeout=60.0) as c:
+            tok = await self._token(c)
+            url = f"{GRAPH}/users?$select=userPrincipalName"
+            headers = {"Authorization": f"Bearer {tok}"}
+            while url:
+                r = await c.get(url, headers=headers)
+                r.raise_for_status()
+                body = r.json()
+                for u in body.get("value", []):
+                    upn = u.get("userPrincipalName")
+                    if upn:
+                        out.extend(await self.sync_user(upn))
+                url = body.get("@odata.nextLink")
+        return out
+```
+
+- [ ] **Step 2: Run test; expect PASS**
+
+Run: `pytest id-ingest/tests/group_sync/test_entra_sync.py -v`
+Expected: PASS.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add id-ingest/src/id_ingest/group_sync/entra_sync.py id-ingest/tests/group_sync/test_entra_sync.py id-ingest/tests/fixtures/graph_groups/
+git commit -m "feat(group-sync): Entra Graph transitiveMemberOf sync"
+```
+
+---
+
+### Task 4.5: `Notifier` — refresh materialized view + Postgres NOTIFY
+
+**Files:**
+- Create: `id-ingest/src/id_ingest/group_sync/notifier.py`
+- Create: `id-ingest/tests/group_sync/test_notifier.py`
+
+- [ ] **Step 1: Failing test**
+
+```python
+import pytest
+
+from id_ingest.group_sync.notifier import GroupChangeNotifier
+
+
+class FakeConn:
+    def __init__(self):
+        self.sql: list[str] = []
+
+    async def execute(self, stmt: str) -> None:
+        self.sql.append(stmt)
+
+
+@pytest.mark.asyncio
+async def test_refresh_and_notify() -> None:
+    conn = FakeConn()
+    notifier = GroupChangeNotifier(conn)
+    await notifier.refresh_and_notify()
+    assert any("REFRESH MATERIALIZED VIEW CONCURRENTLY group_members" in s for s in conn.sql)
+    assert any("NOTIFY groups_changed" in s for s in conn.sql)
+```
+
+- [ ] **Step 2: Run; expect ModuleNotFoundError**
+
+Run: `pytest id-ingest/tests/group_sync/test_notifier.py -v`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement**
+
+```python
+from __future__ import annotations
+
+from typing import Protocol
+
+
+class _AsyncSql(Protocol):
+    async def execute(self, stmt: str) -> None: ...
+
+
+class GroupChangeNotifier:
+    def __init__(self, conn: _AsyncSql) -> None:
+        self._conn = conn
+
+    async def refresh_and_notify(self) -> None:
+        await self._conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY group_members;")
+        await self._conn.execute("NOTIFY groups_changed;")
+```
+
+- [ ] **Step 4: Run; expect PASS**
+
+Run: `pytest id-ingest/tests/group_sync/test_notifier.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add id-ingest/src/id_ingest/group_sync/notifier.py id-ingest/tests/group_sync/test_notifier.py
+git commit -m "feat(group-sync): refresh group_members MV + NOTIFY groups_changed"
+```
+
+---
+
+### Task 4.6: `group-sync` worker task
+
+**Files:**
+- Create: `id-ingest/src/id_ingest/group_sync/worker.py`
+- Create: `id-ingest/tests/group_sync/test_worker.py`
+- Modify: `id-ingest/src/id_ingest/main.py` (run the worker alongside adapters)
+- Modify: `id-ingest/src/id_ingest/settings.py` (AD_* / ENTRA_* / GROUP_SYNC_FULL_CRON)
+
+- [ ] **Step 1: Failing test for on-demand sync**
+
+```python
+import pytest
+
+from id_ingest.group_sync.worker import GroupSyncWorker
+
+
+class FakeSync:
+    def __init__(self):
+        self.calls = []
+    async def sync_user(self, upn):
+        self.calls.append(upn)
+        return [{"user_upn": upn, "group_id": "g", "group_name": "g", "group_source": "ad"}]
+
+
+class FakeNotifier:
+    def __init__(self):
+        self.called = 0
+    async def refresh_and_notify(self):
+        self.called += 1
+
+
+@pytest.mark.asyncio
+async def test_worker_triggers_sync_on_unknown_upn() -> None:
+    syncs = [FakeSync()]
+    notifier = FakeNotifier()
+    w = GroupSyncWorker(syncs=syncs, notifier=notifier, full_sync_cron="0 2 * * *")
+    await w.on_new_upn("alice@example")
+    assert syncs[0].calls == ["alice@example"]
+```
+
+- [ ] **Step 2: Implement**
+
+```python
+from __future__ import annotations
+
+import asyncio
+from typing import Protocol, Sequence
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+from id_ingest.group_sync.notifier import GroupChangeNotifier
+
+
+class _Sync(Protocol):
+    async def sync_user(self, upn: str) -> list[dict]: ...
+    async def sync_all(self) -> "list[dict] | Sequence[dict]": ...
+
+
+class GroupSyncWorker:
+    def __init__(
+        self,
+        *,
+        syncs: Sequence[_Sync],
+        notifier: GroupChangeNotifier | None,
+        full_sync_cron: str,
+        metrics_hook=None,
+    ) -> None:
+        self._syncs = syncs
+        self._notifier = notifier
+        self._cron = full_sync_cron
+        self._seen_upns: set[str] = set()
+        self._sched = AsyncIOScheduler()
+        self._metrics = metrics_hook
+
+    async def on_new_upn(self, upn: str) -> None:
+        if upn in self._seen_upns:
+            return
+        self._seen_upns.add(upn)
+        for s in self._syncs:
+            await s.sync_user(upn)
+
+    async def _full_cycle(self) -> None:
+        started = asyncio.get_event_loop().time()
+        for s in self._syncs:
+            await s.sync_all()
+        if self._notifier:
+            await self._notifier.refresh_and_notify()
+        elapsed = asyncio.get_event_loop().time() - started
+        if self._metrics:
+            self._metrics.observe("group_sync_last_full_cycle_seconds", elapsed)
+
+    def start(self) -> None:
+        self._sched.add_job(self._full_cycle, CronTrigger.from_crontab(self._cron))
+        self._sched.start()
+
+    async def aclose(self) -> None:
+        self._sched.shutdown(wait=False)
+```
+
+- [ ] **Step 3: Run worker test; expect PASS**
+
+Run: `pytest id-ingest/tests/group_sync/test_worker.py -v`
+Expected: PASS.
+
+- [ ] **Step 4: Wire `main.py` to spawn the worker**
+
+In `id-ingest/src/id_ingest/main.py`, expand the top-level `main()`:
+
+```python
+async def main() -> None:
+    settings = IdIngestSettings()
+    producer = RedisStreamProducer(settings.redis_url, stream="identity.events")
+
+    # instantiate adapters via auto-discovery
+    adapter_instances = [cls.from_config({}) for cls in discover_adapters()]
+
+    # group-sync worker
+    from id_ingest.group_sync.ad_sync import AdGroupSync
+    from id_ingest.group_sync.entra_sync import EntraGroupSync
+    from id_ingest.group_sync.notifier import GroupChangeNotifier
+    from id_ingest.group_sync.worker import GroupSyncWorker
+
+    syncs = []
+    if settings.ad_ldap_url:
+        syncs.append(AdGroupSync(
+            ldap_url=settings.ad_ldap_url,
+            bind_dn=settings.ad_bind_dn,
+            bind_password=settings.ad_bind_password,
+            base_dn=settings.ad_base_dn,
+        ))
+    if settings.entra_tenant_id:
+        syncs.append(EntraGroupSync(
+            tenant_id=settings.entra_tenant_id,
+            client_id=settings.entra_client_id,
+            client_secret=settings.entra_client_secret,
+        ))
+
+    notifier = None
+    if settings.postgres_dsn:
+        import asyncpg
+        pg = await asyncpg.connect(settings.postgres_dsn)
+        notifier = GroupChangeNotifier(pg)
+
+    worker = GroupSyncWorker(syncs=syncs, notifier=notifier, full_sync_cron=settings.group_sync_full_cron)
+    worker.start()
+
+    async def _run_adapter(a):
+        async for ev in a.run():
+            await producer.xadd(ev)
+            if "user_upn" in ev:
+                await worker.on_new_upn(ev["user_upn"])
+
+    await asyncio.gather(*[_run_adapter(a) for a in adapter_instances])
+```
+
+- [ ] **Step 5: Extend settings**
+
+```python
+class IdIngestSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", extra="ignore")
+
+    redis_url: str = "redis://redis:6379/0"
+    postgres_dsn: str | None = None
+    adapter_config_dir: str = "/etc/flowvis/adapters"
+    health_port: int = 8081
+    log_level: str = "INFO"
+
+    ad_ldap_url: str | None = None
+    ad_bind_dn: str = ""
+    ad_bind_password: str = ""
+    ad_base_dn: str = ""
+
+    entra_tenant_id: str | None = None
+    entra_client_id: str = ""
+    entra_client_secret: str = ""
+
+    group_sync_full_cron: str = "0 2 * * *"
+```
+
+- [ ] **Step 6: Run full id-ingest suite; expect green**
+
+Run: `pytest id-ingest/`
+Expected: all tests PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add id-ingest/src/id_ingest/group_sync/worker.py id-ingest/src/id_ingest/main.py id-ingest/src/id_ingest/settings.py id-ingest/tests/group_sync/test_worker.py
+git commit -m "feat(group-sync): worker + main wiring with AD/Entra branches"
+```
+
+---
+
+**End of Chunk 4.**
+Gate: `pytest id-ingest/` green; nightly cron + on-demand paths covered; `NOTIFY groups_changed` emitted by notifier.
 
 ---
 
