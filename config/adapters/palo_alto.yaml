@@ -1,0 +1,7 @@
+# Palo Alto PAN-OS firewalls. Populate `source_ips` with the IPs your PAN
+# firewalls use when emitting syslog to this collector. Used to demux the
+# shared :514 entrypoint.
+enabled: true
+source_ips:
+  - 10.10.0.11
+  - 10.10.0.12

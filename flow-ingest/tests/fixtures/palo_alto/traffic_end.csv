@@ -1,0 +1,3 @@
+# fields (1-based): 1=receive_time 2=serial 3=type 4=log_subtype 5=config_version 6=generated_time 7=src_ip 8=dst_ip 9=nat_src 10=nat_dst 11=rule 12=src_user 13=dst_user 14=app 15=vsys 16=from_zone 17=to_zone 18=inbound_if 19=outbound_if 20=log_action 21=reserved 22=session_id 23=repeat_count 24=src_port 25=dst_port 26=nat_src_port 27=nat_dst_port 28=flags 29=proto 30=action 31=bytes 32=packets 33=...
+1,2026/04/22 14:12:05,001801000000,TRAFFIC,end,2560,2026/04/22 14:12:05,10.0.0.1,52.97.1.1,,,allow-all,,,ms-office365,vsys1,trust,untrust,ae1,ae2,,,,,44321,443,,,0x400000,tcp,allow,1024,8
+1,2026/04/22 14:12:06,001801000000,TRAFFIC,end,2560,2026/04/22 14:12:06,10.0.0.2,140.82.112.3,,,deny-github,,,github,vsys1,trust,untrust,ae1,ae2,,,,,54321,443,,,0x400000,tcp,deny,512,4
