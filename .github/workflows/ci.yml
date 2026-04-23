@@ -118,6 +118,8 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Seed .env for compose (env_file reference)
+        run: cp .env.example .env
       - name: Build and start stack
         env:
           APP_DOMAIN: localhost
@@ -155,6 +157,8 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: e2e/package-lock.json
+      - name: Seed .env for compose (env_file reference)
+        run: cp .env.example .env
       - name: Build and start stack
         env:
           APP_DOMAIN: localhost
