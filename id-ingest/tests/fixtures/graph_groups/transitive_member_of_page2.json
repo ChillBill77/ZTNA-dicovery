@@ -1,0 +1,5 @@
+{
+  "value": [
+    {"@odata.type": "#microsoft.graph.group", "id": "g-m365", "displayName": "M365 Licensed"}
+  ]
+}

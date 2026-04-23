@@ -63,18 +63,128 @@ async def run_once(timeout_s: float = 1.0) -> bool:
     return True
 
 
-async def _main() -> None:
-    """Full runtime: start discovered adapters + group-sync worker + producer.
+def _build_adapter(
+    cls: type[IdentityAdapter], settings: IdIngestSettings
+) -> IdentityAdapter | None:
+    """Construct one adapter with settings-derived config.
 
-    Chunks 2-4 populate the real adapter + worker bodies; this shell exists so
-    the Dockerfile ``CMD`` has a module to import and run.
+    Returns ``None`` when a required env var is absent for that adapter (e.g.,
+    Entra without a tenant). The caller drops ``None`` entries so the remaining
+    adapters still run.
     """
 
+    name = cls.name
+    from_config = getattr(cls, "from_config", None)
+    if from_config is None:
+        return None
+    if name == "ad_4624":
+        return from_config({"port": settings.ad_syslog_port})  # type: ignore[no-any-return]
+    if name == "cisco_ise":
+        return from_config({"port": settings.ise_syslog_port})  # type: ignore[no-any-return]
+    if name == "aruba_clearpass":
+        return from_config({"port": settings.clearpass_syslog_port})  # type: ignore[no-any-return]
+    if name == "entra_signin":
+        if not settings.entra_tenant_id:
+            logger.info("entra_signin skipped: ENTRA_TENANT_ID not set")
+            return None
+        corp_cidrs = [
+            c.strip() for c in settings.entra_corp_cidrs.split(",") if c.strip()
+        ]
+        return from_config(  # type: ignore[no-any-return]
+            {
+                "tenant_id": settings.entra_tenant_id,
+                "client_id": settings.entra_client_id,
+                "client_secret": settings.entra_client_secret,
+                "corp_cidrs": corp_cidrs,
+                "poll_interval_s": settings.entra_poll_interval_s,
+            }
+        )
+    logger.warning("unknown adapter {}; skipping", name)
+    return None
+
+
+async def _main() -> None:
+    """Full runtime: start discovered adapters + group-sync worker + producer."""
+
     settings = IdIngestSettings()
-    logger.info("id-ingest starting (no adapters registered yet)")
-    # Keep the process alive until signaled; real wiring lands in chunks 2-4.
-    await run_once(timeout_s=float("inf"))
-    _ = settings  # silence unused in the skeleton
+    producer = make_producer(settings.redis_url)
+
+    # Instantiate adapters via auto-discovery + settings-driven config.
+    discovered = list(discover_adapters())
+    instances: list[IdentityAdapter] = []
+    for cls in discovered:
+        try:
+            a = _build_adapter(cls, settings)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("adapter {} build failed: {}", cls.name, exc)
+            continue
+        if a is not None:
+            instances.append(a)
+    logger.info(
+        "id-ingest: {} adapter(s) registered: {}",
+        len(instances),
+        [a.name for a in instances],
+    )
+
+    # Group-sync worker (optional: only active if AD or Entra credentials set).
+    from id_ingest.group_sync.ad_sync import AdGroupSync
+    from id_ingest.group_sync.entra_sync import EntraGroupSync
+    from id_ingest.group_sync.notifier import GroupChangeNotifier
+    from id_ingest.group_sync.worker import GroupSyncWorker
+
+    syncs: list[object] = []
+    if settings.ad_ldap_url:
+        syncs.append(
+            AdGroupSync(
+                ldap_url=settings.ad_ldap_url,
+                bind_dn=settings.ad_bind_dn,
+                bind_password=settings.ad_bind_password,
+                base_dn=settings.ad_base_dn,
+            )
+        )
+    if settings.entra_tenant_id:
+        syncs.append(
+            EntraGroupSync(
+                tenant_id=settings.entra_tenant_id,
+                client_id=settings.entra_client_id,
+                client_secret=settings.entra_client_secret,
+            )
+        )
+
+    notifier: GroupChangeNotifier | None = None
+    if settings.database_url:
+        try:
+            import asyncpg
+
+            pg = await asyncpg.connect(settings.database_url)
+            notifier = GroupChangeNotifier(pg)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("notifier init failed; refresh+NOTIFY disabled: {}", exc)
+
+    worker = GroupSyncWorker(
+        syncs=syncs,  # type: ignore[arg-type]
+        notifier=notifier,
+        full_sync_cron=settings.group_sync_full_cron,
+    )
+    if syncs:
+        worker.start()
+
+    async def _run_adapter(a: IdentityAdapter) -> None:
+        async for ev in a.run():
+            await producer.xadd(ev)
+            upn = ev.get("user_upn")
+            if upn and syncs:
+                await worker.on_new_upn(upn)
+
+    try:
+        if instances:
+            await asyncio.gather(*[_run_adapter(a) for a in instances])
+        else:
+            logger.info("no adapters registered; idling")
+            await run_once(timeout_s=float("inf"))
+    finally:
+        await worker.aclose()
+        await producer.aclose()
 
 
 def main() -> None:
