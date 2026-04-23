@@ -1,0 +1,8 @@
+{
+  "id": "miss-001",
+  "createdDateTime": "2026-04-22T12:11:00Z",
+  "userPrincipalName": "outside@corp.example",
+  "ipAddress": "198.51.100.77",
+  "status": {"errorCode": 0, "additionalDetails": "signed in from outside corp CIDR"},
+  "deviceDetail": {"deviceId": "dev-miss"}
+}

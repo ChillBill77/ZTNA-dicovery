@@ -1,0 +1,22 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#auditLogs/signIns",
+  "@odata.nextLink": "https://graph.microsoft.com/v1.0/auditLogs/signIns?$skiptoken=abc",
+  "value": [
+    {
+      "id": "aaa-111",
+      "createdDateTime": "2026-04-22T12:05:00Z",
+      "userPrincipalName": "alice@corp.example",
+      "ipAddress": "10.0.12.34",
+      "status": {"errorCode": 0, "additionalDetails": "MFA requirement satisfied by claim in the token"},
+      "deviceDetail": {"deviceId": "dev-1"}
+    },
+    {
+      "id": "aaa-112",
+      "createdDateTime": "2026-04-22T12:05:03Z",
+      "userPrincipalName": "svc@corp.example",
+      "ipAddress": "203.0.113.7",
+      "status": {"errorCode": 50074, "additionalDetails": "Strong auth required"},
+      "deviceDetail": {}
+    }
+  ]
+}

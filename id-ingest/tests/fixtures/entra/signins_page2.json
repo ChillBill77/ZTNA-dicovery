@@ -1,0 +1,22 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#auditLogs/signIns",
+  "@odata.deltaLink": "https://graph.microsoft.com/v1.0/auditLogs/signIns?$deltatoken=xyz",
+  "value": [
+    {
+      "id": "bbb-211",
+      "createdDateTime": "2026-04-22T12:06:01Z",
+      "userPrincipalName": "bob@corp.example",
+      "ipAddress": "198.51.100.5",
+      "status": {"errorCode": 0, "additionalDetails": "signed in from trusted IP"},
+      "deviceDetail": {"deviceId": "dev-2"}
+    },
+    {
+      "id": "bbb-212",
+      "createdDateTime": "2026-04-22T12:06:10Z",
+      "userPrincipalName": "carol@corp.example",
+      "ipAddress": "10.0.99.2",
+      "status": {"errorCode": 0, "additionalDetails": "MFA requirement satisfied by claim in the token"},
+      "deviceDetail": {"deviceId": "dev-3"}
+    }
+  ]
+}
