@@ -17,7 +17,7 @@
 
 **Question.** How can the organization establish a live, group-aware baseline of network flows enriched with identity data, so policy designers can see at a glance which users and groups access which applications — and move from guesswork to evidence-based zero-trust policy design?
 
-### Overview
+### Solution Overview
 
 Organizations rolling out Zero Trust Network Access (ZTNA) need to first **see** what exists: which endpoints (source computers / users) communicate with which applications (destination servers and ports). Current firewall consoles and SIEM dashboards surface raw logs but don't give a live, identity-aware, group-level view suitable for policy design discussions.
 
