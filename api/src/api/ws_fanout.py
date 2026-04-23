@@ -14,9 +14,7 @@ from redis.asyncio import Redis
 @dataclass
 class ClientState:
     send: Callable[[str], Awaitable[None]]
-    filters: dict[str, Any] = field(
-        default_factory=dict
-    )  # src_cidr, dst_app, proto, deny_only
+    filters: dict[str, Any] = field(default_factory=dict)  # src_cidr, dst_app, proto, deny_only
 
     def matches(self, link: dict[str, Any]) -> bool:
         src_cidr = self.filters.get("src_cidr")
