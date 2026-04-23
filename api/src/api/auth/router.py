@@ -154,7 +154,19 @@ async def me(
 
 
 @router.get("/auth/verify")
-async def verify(user: dict[str, Any] = Depends(current_user)) -> Response:
+async def verify(
+    request: Request,
+    user: dict[str, Any] = Depends(current_user),
+) -> Response:
+    # Traefik sets X-Forwarded-Uri to the originally-requested path when using
+    # forwardAuth. Dashboard traffic (/traefik/*) is gated to the admin role.
+    forwarded_uri = request.headers.get("x-forwarded-uri", "")
+    if forwarded_uri.startswith("/traefik") and "admin" not in user.get(
+        "roles", set()
+    ):
+        raise HTTPException(
+            status_code=403, detail="admin role required for /traefik"
+        )
     r = JSONResponse(content={})
     r.headers["X-User"] = user["user_upn"]
     r.headers["X-Roles"] = ",".join(sorted(user["roles"]))

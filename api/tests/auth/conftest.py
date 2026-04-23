@@ -55,24 +55,53 @@ def client_with_mock_idp(
     return c
 
 
-@pytest.fixture
-def authed_client(
-    _app_factory: Any, monkeypatch: pytest.MonkeyPatch
+def _authed_client_with(
+    _app_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    roles: set[str],
+    upn: str = "alice@example.com",
 ) -> TestClient:
-    # Align the app's session secret with the codec we sign the test cookie
-    # with so the router's SessionCodec decodes the token correctly.
     monkeypatch.setenv("SESSION_SECRET", "x" * 32)
-    app = _app_factory()
-    c = TestClient(app)
+    c = TestClient(_app_factory())
     codec = SessionCodec(secret="x" * 32)
     token = codec.encode(
-        SessionData(
-            user_upn="alice@example.com",
-            roles={"viewer"},
-            csrf="t123",
-            exp=9999999999,
-        )
+        SessionData(user_upn=upn, roles=roles, csrf="t123", exp=9999999999)
     )
     c.cookies.set("session", token)
     c.cookies.set("csrf_token", "t123")
     return c
+
+
+@pytest.fixture
+def authed_client(
+    _app_factory: Any, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    return _authed_client_with(_app_factory, monkeypatch, roles={"viewer"})
+
+
+@pytest.fixture
+def authed_viewer_client(
+    _app_factory: Any, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    return _authed_client_with(_app_factory, monkeypatch, roles={"viewer"})
+
+
+@pytest.fixture
+def authed_editor_client(
+    _app_factory: Any, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    return _authed_client_with(
+        _app_factory, monkeypatch, roles={"viewer", "editor"}
+    )
+
+
+@pytest.fixture
+def authed_admin_client(
+    _app_factory: Any, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    return _authed_client_with(
+        _app_factory,
+        monkeypatch,
+        roles={"viewer", "editor", "admin"},
+    )

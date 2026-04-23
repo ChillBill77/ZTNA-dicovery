@@ -1,0 +1,16 @@
+# Traefik dashboard — admin-only, behind forwardAuth to api /auth/verify.
+#
+# `api@internal` is Traefik's built-in dashboard handler. The forwardAuth
+# middleware checks with the app api whether the session cookie resolves to a
+# caller holding the `admin` role (driven by X-Forwarded-Uri → `/traefik/`).
+
+http:
+  routers:
+    traefik-dashboard:
+      rule: "Host(`${APP_DOMAIN}`) && PathPrefix(`/traefik`)"
+      service: api@internal
+      entryPoints: [websecure]
+      middlewares:
+        - oidc-verify@file
+        - secure-headers@file
+      tls: {}
