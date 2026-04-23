@@ -6011,7 +6011,666 @@ Manual verification step to confirm wiring. Not automated in CI (that's integrat
 
 ## Chunk 7: integration tests + CI extensions
 
-<!-- CHUNK-7-PLACEHOLDER -->
+Wires the P2 pipeline into the existing CI matrix from P1 and adds an integration harness that drives a recorded syslog stream through the whole stack, asserting on DB rows and WebSocket output. Scope:
+
+- `compose.test.yml` overlay — minimal services for integration (postgres, redis, migrate, flow-ingest, correlator, api) with fast healthchecks and no Traefik
+- Fixture replay helper (`tests/integration/replay.py`) — streams a fixture file into the `firewall-syslog` entrypoint via asyncio UDP/TCP
+- Integration tests (`tests/integration/test_pipeline_end_to_end.py`) — assert `flows` rows land, app resolution applied, WS `SankeyDelta` received, `applications` override propagates in ≤ 2 ticks
+- Playwright smoke (`e2e/tests/sankey.spec.ts`) — boots stack via Compose, visits `/`, expects Sankey to render with ≥ 1 link, clicks a link, asserts details pane
+- CI extensions in `.github/workflows/ci.yml` — three new jobs (`web`, `python-integration`, `playwright-smoke`); `no-claude-attribution` from P1 remains and must stay green
+
+### Task 7.1: Add `compose.test.yml` integration overlay
+
+**Files:**
+- Create: `compose.test.yml`
+
+- [ ] **Step 1: Write `compose.test.yml`**
+
+```yaml
+# Integration-test overlay. Layered via:
+#   docker compose -f docker-compose.yml -f compose.test.yml up -d --build
+# - Drops Traefik (tests hit api directly on backend network)
+# - Speeds up healthchecks
+# - Mounts fixture dir for replay helper
+
+services:
+  postgres:
+    healthcheck:
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    healthcheck:
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  flow-ingest:
+    environment:
+      FLOWINGEST_SYSLOG_UDP_PORT: 5514
+      FLOWINGEST_SYSLOG_TCP_PORT: 5514
+    ports:
+      - "5514:5514/udp"
+      - "5514:5514/tcp"
+    volumes:
+      - ./tests/fixtures:/fixtures:ro
+
+  correlator:
+    environment:
+      CORRELATOR_WINDOW_SECONDS: 1    # tighter window for test speed
+      CORRELATOR_FLUSH_INTERVAL_MS: 200
+
+  api:
+    ports:
+      - "8000:8000"
+
+  # Traefik intentionally omitted for integration — tests hit api directly
+  traefik:
+    profiles: ["disabled"]
+```
+
+- [ ] **Step 2: Validate**
+
+Run: `docker compose -f docker-compose.yml -f compose.test.yml config > /dev/null`
+Expected: exit 0.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add compose.test.yml
+git commit -m "test(integration): add compose.test.yml overlay (no traefik, fast healthchecks, fixture mount)"
+```
+
+---
+
+### Task 7.2: Record PAN + FortiGate golden fixtures for integration replay
+
+**Files:**
+- Create: `tests/fixtures/palo_alto/traffic_end_sample.csv`
+- Create: `tests/fixtures/fortigate/traffic_forward_close_sample.log`
+- Create: `tests/fixtures/palo_alto/README.md`
+- Create: `tests/fixtures/fortigate/README.md`
+
+- [ ] **Step 1: Write `tests/fixtures/palo_alto/traffic_end_sample.csv`**
+
+Redacted CSV fixture with ~20 `log_subtype=end` lines covering:
+- 3 distinct `(src_ip, dst_ip, dst_port)` tuples, 5–8 sessions each
+- Mix of TCP (proto 6) and UDP (proto 17)
+- At least one flow with App-ID `ms-office365` to exercise the SaaS match
+- At least one `action=allow` and one `action=deny`
+
+Use RFC 5737 documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`). No real customer data. Format per PAN-OS TRAFFIC CSV field map documented in Chunk 1 Task 1.3.
+
+- [ ] **Step 2: Write `tests/fixtures/fortigate/traffic_forward_close_sample.log`**
+
+~15 key=value lines with `type=traffic`, `subtype=forward`, `status=close`. Include at least one `hostname=outlook.office365.com` for SaaS matching. Same RFC 5737 address policy.
+
+- [ ] **Step 3: Write `tests/fixtures/palo_alto/README.md`**
+
+```markdown
+# Palo Alto PAN-OS TRAFFIC fixtures
+
+Redacted, synthetic samples used by the P2 integration test harness.
+
+- `traffic_end_sample.csv` — 20 sessions of `log_subtype=end`, mix of TCP/UDP, 3 distinct dst tuples, one with App-ID `ms-office365`.
+
+All IPs are in RFC 5737 documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`). No real customer data.
+
+Format reference: PAN-OS 10.x TRAFFIC CSV log fields (see Chunk 1 Task 1.3 field map).
+```
+
+- [ ] **Step 4: Write `tests/fixtures/fortigate/README.md`**
+
+```markdown
+# FortiGate syslog fixtures
+
+Redacted, synthetic samples used by the P2 integration test harness.
+
+- `traffic_forward_close_sample.log` — 15 lines of `type=traffic,subtype=forward,status=close` in key=value format. Includes a `hostname=outlook.office365.com` line for SaaS resolution.
+
+All IPs are in RFC 5737 documentation ranges.
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/fixtures/palo_alto/ tests/fixtures/fortigate/
+git commit -m "test(integration): add redacted PAN + FortiGate golden fixtures"
+```
+
+---
+
+### Task 7.3: Add fixture replay helper and compose-stack pytest fixture
+
+**Files:**
+- Create: `tests/integration/__init__.py` (empty)
+- Create: `tests/integration/replay.py`
+- Create: `tests/integration/conftest.py`
+
+- [ ] **Step 1: Write `tests/integration/replay.py`**
+
+```python
+"""Replay a fixture file into the firewall-syslog entrypoint.
+
+Two transports: UDP via asyncio datagram, TCP via asyncio stream.
+Replay rate is configurable; default is "as fast as possible" for tests.
+"""
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+
+async def replay_udp(
+    *,
+    path: Path,
+    host: str,
+    port: int,
+    rate_per_s: float | None = None,
+) -> int:
+    loop = asyncio.get_running_loop()
+    transport, _ = await loop.create_datagram_endpoint(
+        asyncio.DatagramProtocol, remote_addr=(host, port)
+    )
+    try:
+        lines = path.read_text().splitlines()
+        delay = 1.0 / rate_per_s if rate_per_s else 0.0
+        for line in lines:
+            if not line.strip():
+                continue
+            transport.sendto(line.encode())
+            if delay:
+                await asyncio.sleep(delay)
+        return len(lines)
+    finally:
+        transport.close()
+
+
+async def replay_tcp(
+    *,
+    path: Path,
+    host: str,
+    port: int,
+) -> int:
+    reader, writer = await asyncio.open_connection(host, port)
+    del reader
+    try:
+        content = path.read_bytes()
+        writer.write(content)
+        await writer.drain()
+        return content.count(b"\n")
+    finally:
+        writer.close()
+        await writer.wait_closed()
+```
+
+- [ ] **Step 2: Write `tests/integration/conftest.py`**
+
+```python
+from __future__ import annotations
+
+import os
+import subprocess
+import time
+import urllib.request
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+
+COMPOSE_FILES = ["-f", "docker-compose.yml", "-f", "compose.test.yml"]
+FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures"
+
+
+def _compose(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["docker", "compose", *COMPOSE_FILES, *args],
+        env=env, text=True, capture_output=True, check=True,
+    )
+
+
+def _wait_for_api_ready(timeout_s: int = 120) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen("http://localhost:8000/health/ready", timeout=3) as r:
+                if r.status == 200:
+                    return
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(2)
+    raise TimeoutError(f"api /health/ready did not reach 200 within {timeout_s}s")
+
+
+@pytest.fixture(scope="session")
+def compose_stack() -> Iterator[dict[str, str]]:
+    """Bring up docker-compose.yml + compose.test.yml; yield env; tear down."""
+    env = os.environ.copy()
+    env.setdefault("APP_DOMAIN", "localhost")
+    env.setdefault("POSTGRES_USER", "ztna")
+    env.setdefault("POSTGRES_PASSWORD", "integration")
+    env.setdefault("POSTGRES_DB", "ztna")
+    env.setdefault("DATABASE_URL", "postgresql+asyncpg://ztna:integration@postgres:5432/ztna")
+    env.setdefault("REDIS_URL", "redis://redis:6379/0")
+    env.setdefault("ACME_EMAIL", "")
+
+    _compose(env, "up", "-d", "--build")
+    try:
+        _wait_for_api_ready()
+        yield env
+    finally:
+        subprocess.run(
+            ["docker", "compose", *COMPOSE_FILES, "down", "-v", "--remove-orphans"],
+            env=env, check=False,
+        )
+
+
+@pytest.fixture
+def fixture_path() -> Path:
+    return FIXTURE_ROOT
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tests/integration/__init__.py tests/integration/replay.py tests/integration/conftest.py
+git commit -m "test(integration): add replay helper and compose-stack session fixture"
+```
+
+---
+
+### Task 7.4: End-to-end integration test
+
+**Files:**
+- Create: `tests/integration/test_pipeline_end_to_end.py`
+
+- [ ] **Step 1: Write the test**
+
+```python
+"""End-to-end P2 pipeline integration test.
+
+Drives a recorded PAN syslog fixture through:
+  syslog UDP :5514 → flow-ingest → Redis flows.raw → correlator → flows table
+                                                              → /ws/sankey → assertion
+
+Also tests that an application override inserted via POST /api/applications
+propagates to the next tick's SankeyDelta.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+import urllib.request
+from pathlib import Path
+
+import pytest
+import websockets
+
+from tests.integration.replay import replay_udp
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.mark.asyncio
+async def test_pan_flows_reach_db_and_websocket(compose_stack, fixture_path: Path) -> None:
+    # 1. Replay fixture
+    path = fixture_path / "palo_alto" / "traffic_end_sample.csv"
+    sent = await replay_udp(path=path, host="localhost", port=5514)
+    assert sent > 0
+
+    # 2. Wait up to 15 s for flows to appear in DB
+    deadline = time.monotonic() + 15
+    count = 0
+    while time.monotonic() < deadline:
+        req = urllib.request.Request("http://localhost:8000/api/flows/raw?limit=100")
+        with urllib.request.urlopen(req, timeout=3) as r:
+            body = json.loads(r.read())
+        count = len(body["items"])
+        if count > 0:
+            break
+        await asyncio.sleep(1)
+    assert count > 0, "no flows landed in DB within 15 s"
+
+    # 3. Subscribe to /ws/sankey and wait for a delta
+    async with websockets.connect("ws://localhost:8000/ws/sankey?mode=live") as ws:
+        msg = await asyncio.wait_for(ws.recv(), timeout=10)
+        delta = json.loads(msg)
+        assert delta["nodes_left"], delta
+        assert delta["nodes_right"], delta
+        assert delta["links"], delta
+        assert "lossy" in delta
+        assert "window_s" in delta
+
+
+@pytest.mark.asyncio
+async def test_application_override_propagates_within_two_ticks(
+    compose_stack, fixture_path: Path
+) -> None:
+    # Seed flows first
+    path = fixture_path / "palo_alto" / "traffic_end_sample.csv"
+    await replay_udp(path=path, host="localhost", port=5514)
+    await asyncio.sleep(2)
+
+    # Insert an override for a specific dst_cidr present in the fixture
+    override = {
+        "name": "INTEGRATION-TEST-OVERRIDE",
+        "dst_cidr": "198.51.100.10/32",
+        "dst_port_min": 443, "dst_port_max": 443,
+        "proto": 6, "priority": 1000, "owner": "integration",
+    }
+    req = urllib.request.Request(
+        "http://localhost:8000/api/applications",
+        method="POST", data=json.dumps(override).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=3) as r:
+        assert r.status == 201
+
+    # Replay again to generate new window activity
+    await replay_udp(path=path, host="localhost", port=5514)
+
+    # WS should see our label within 2 ticks (~10 s)
+    async with websockets.connect("ws://localhost:8000/ws/sankey?mode=live") as ws:
+        for _ in range(3):
+            msg = await asyncio.wait_for(ws.recv(), timeout=10)
+            delta = json.loads(msg)
+            labels = {n["label"] for n in delta["nodes_right"]}
+            if "INTEGRATION-TEST-OVERRIDE" in labels:
+                return
+        pytest.fail("override did not propagate within 3 ticks")
+```
+
+- [ ] **Step 2: Run before implementation (expected to fail — services missing)**
+
+```bash
+pytest tests/integration/test_pipeline_end_to_end.py -v -m integration
+```
+Expected at plan-authoring time: FAIL during compose up (services not yet built).
+
+- [ ] **Step 3: After Chunks 1–6 are implemented, run to verify PASS**
+
+```bash
+pytest tests/integration/test_pipeline_end_to_end.py -v -m integration
+```
+Expected: 2 passed, stack torn down cleanly.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add tests/integration/test_pipeline_end_to_end.py
+git commit -m "test(integration): end-to-end PAN → WS assertion + override propagation"
+```
+
+---
+
+### Task 7.5: Register the `integration` pytest marker
+
+**Files:**
+- Modify: `pytest.ini`
+
+- [ ] **Step 1: Add a `markers` section**
+
+```ini
+[pytest]
+addopts = -ra --strict-markers --strict-config
+testpaths = api/tests tests
+asyncio_mode = auto
+markers =
+    integration: end-to-end tests that require docker compose
+```
+
+- [ ] **Step 2: Verify**
+
+Run: `pytest --markers | grep integration`
+Expected: shows the `integration` marker.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add pytest.ini
+git commit -m "test: register integration pytest marker"
+```
+
+---
+
+### Task 7.6: Playwright smoke test
+
+**Files:**
+- Create: `e2e/package.json`
+- Create: `e2e/playwright.config.ts`
+- Create: `e2e/tests/sankey.spec.ts`
+
+- [ ] **Step 1: Write `e2e/package.json`**
+
+```json
+{
+  "name": "ztna-e2e",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "install-browsers": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "typescript": "^5.6.2"
+  }
+}
+```
+
+- [ ] **Step 2: Write `e2e/playwright.config.ts`**
+
+```ts
+import { defineConfig, devices } from "@playwright/test";
+
+export default defineConfig({
+  testDir: "./tests",
+  timeout: 60_000,
+  expect: { timeout: 10_000 },
+  reporter: [["list"]],
+  use: {
+    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:8000",
+    trace: "retain-on-failure",
+  },
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+  ],
+});
+```
+
+- [ ] **Step 3: Write `e2e/tests/sankey.spec.ts`**
+
+```ts
+import { expect, test } from "@playwright/test";
+
+test("sankey renders with at least one link and details pane populates on click", async ({ page }) => {
+  await page.goto("/");
+
+  // Sankey container must render within 15 s of page load
+  const sankey = page.locator('[data-testid="sankey-canvas"]');
+  await expect(sankey).toBeVisible({ timeout: 15_000 });
+
+  // Wait for at least one link to appear
+  const link = page.locator('[data-testid="sankey-link"]').first();
+  await expect(link).toBeVisible({ timeout: 15_000 });
+
+  // Click the link and verify the details pane populates
+  await link.click();
+  const details = page.locator('[data-testid="details-pane"]');
+  await expect(details).toContainText(/bytes|flows|users/i, { timeout: 5_000 });
+});
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add e2e/
+git commit -m "test(e2e): playwright smoke for Sankey render + link details"
+```
+
+---
+
+### Task 7.7: Extend `.github/workflows/ci.yml` with web, integration, and Playwright jobs
+
+**Files:**
+- Modify: `.github/workflows/ci.yml`
+
+- [ ] **Step 1: Append three jobs to the existing workflow**
+
+Locate the `jobs:` block in `.github/workflows/ci.yml` (from P1) and add these three jobs alongside the existing `python`, `no-claude-attribution`, and `migration-roundtrip` jobs:
+
+```yaml
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm exec eslint .
+      - run: pnpm exec vitest run
+
+  python-integration:
+    runs-on: ubuntu-latest
+    needs: [python]
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_PASSWORD: integration
+          POSTGRES_USER: integration
+          POSTGRES_DB: integration
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U integration"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://integration:integration@localhost:5432/integration
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e 'api/[test]' -e 'flow-ingest/[test]' -e 'correlator/[test]'
+      - run: pytest tests/integration -v -m integration
+
+  playwright-smoke:
+    runs-on: ubuntu-latest
+    needs: [python, web]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start stack
+        env:
+          APP_DOMAIN: localhost
+          POSTGRES_USER: ztna
+          POSTGRES_PASSWORD: integration
+          POSTGRES_DB: ztna
+          DATABASE_URL: postgresql+asyncpg://ztna:integration@postgres:5432/ztna
+          REDIS_URL: redis://redis:6379/0
+          ACME_EMAIL: ""
+        run: docker compose -f docker-compose.yml -f compose.test.yml up -d --build
+      - name: Wait for api /health/ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fs http://localhost:8000/health/ready; then break; fi
+            sleep 2
+          done
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: e2e/pnpm-lock.yaml
+      - name: Install e2e deps + browser
+        working-directory: e2e
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run install-browsers
+      - name: Run Playwright
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: http://localhost:8000
+        run: pnpm test
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f compose.test.yml down -v --remove-orphans
+```
+
+- [ ] **Step 2: Validate**
+
+Run `actionlint .github/workflows/ci.yml` if available (expected: no errors); otherwise push the branch and observe CI.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add .github/workflows/ci.yml
+git commit -m "ci: add web, python-integration, playwright-smoke jobs"
+```
+
+---
+
+### Task 7.8: Final acceptance walk-through (manual)
+
+Run end-to-end before opening the PR; not automated beyond CI.
+
+- [ ] **Step 1:** `make clean && cp .env.example .env && make up` — stack healthy within 60 s
+- [ ] **Step 2:** `docker compose -f docker-compose.yml -f compose.test.yml up -d --build` — integration stack up
+- [ ] **Step 3:** `pytest tests/integration -v -m integration` — 2 passed
+- [ ] **Step 4:** `cd e2e && pnpm install && pnpm run install-browsers && pnpm test` — playwright smoke passes
+- [ ] **Step 5:** `docker compose down -v --remove-orphans` — clean shutdown
+- [ ] **Step 6:** No commit — operator acceptance only
+
+---
+
+## Acceptance criteria (Plan 2 done)
+
+- [ ] `docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile dev up -d --build` boots the full pipeline + mock generator within 90 s on a dev laptop
+- [ ] Within 30 s of boot, `redis-cli xlen flows.raw` > 0 and `flows` table has > 0 rows
+- [ ] `GET /api/flows/sankey?mode=live` returns a `SankeyDelta` with non-empty `links`, correct `truncated`/`total_links` fields
+- [ ] `GET /api/flows/raw` supports cursor pagination; `next_cursor` round-trips correctly
+- [ ] `WS /ws/sankey?mode=live` pushes a new `SankeyDelta` every 5 s with `lossy` flag
+- [ ] `POST /api/applications` with a new override propagates to the next WS tick (≤ 10 s)
+- [ ] `tests/integration` passes in CI against ephemeral postgres + redis
+- [ ] Playwright smoke passes in CI (Sankey renders, link click populates details pane)
+- [ ] Web lint + type + vitest green in CI
+- [ ] `no-claude-attribution` still green across all P2 commits
+- [ ] No secrets committed; `.env.example` documents every new variable introduced in P2
+
+---
+
+## Execution notes
+
+- **Chunk order is a dependency order.** Chunk 3 (correlator) cannot be integration-tested until Chunk 1 (flow-ingest) emits on `flows.raw`; Chunk 4 (api) depends on Chunk 3's `flows` rows; Chunk 5 (web) consumes Chunk 4's api; Chunk 6 wires it together in Compose; Chunk 7 asserts on the whole thing.
+- **TDD discipline.** Within each chunk, the failing test comes first. Exceptions: config-only tasks (Dockerfile, compose overlay, pytest marker) where there is no behavior to test — those still include a validate-step that proves the artifact is well-formed.
+- **Commits are small and frequent.** Each step's suggested commit is sized so a reviewer can grok the diff without cross-referencing.
 
 ---
 
