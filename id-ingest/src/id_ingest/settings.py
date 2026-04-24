@@ -35,3 +35,4 @@ class IdIngestSettings(BaseSettings):
     clearpass_syslog_port: int = 518
 
     group_sync_full_cron: str = "0 2 * * *"
+    metrics_port: int = 9100
