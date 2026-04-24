@@ -7,7 +7,7 @@ dependencies = [
   "pydantic-settings==2.5.2",
   "redis==5.1.0",
   "asyncpg==0.29.0",
-  "loguru==0.7.2",
+  "loguru==0.7.3",
   "uvloop==0.20.0",
   "intervaltree==3.1.0",
   "prometheus-client==0.21.0",
