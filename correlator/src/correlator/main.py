@@ -18,18 +18,22 @@ from correlator.pipeline.app_resolver import (
     PortDefault,
     SaasEntry,
 )
+from correlator.pipeline.enricher import Enricher
+from correlator.pipeline.group_index import GroupIndex
+from correlator.pipeline.identity_index import IdentityIndex
+from correlator.pipeline.metrics import IDENTITY_INDEX_SIZE
 from correlator.pipeline.sankey_publisher import LabelledFlow, SankeyPublisher
 from correlator.pipeline.windower import FlowWindower, WindowedFlow
 from correlator.pipeline.writer import Writer
 from correlator.settings import CorrelatorSettings
 
-# TODO(P3-followup): wire the identity-side pipeline stages into _main() so the
-# runtime consumes `identity.events`, enriches windowed flows with user_upn +
-# groups, and runs the LCD GroupAggregator. The stages themselves and their
-# unit tests are already in place under correlator.pipeline.{identity_index,
-# group_index, enricher, group_aggregator}; only the main-loop plumbing is
-# deferred, since the P2 flow pipeline is load-bearing and rewriting it should
-# happen in a focused follow-up PR rather than inside P3.
+# P3 identity pipeline wiring landed in Cycle 2 follow-up: `_identity_consumer`
+# reads from the `identity.events` Redis stream into the in-memory
+# IdentityIndex; GroupIndex is loaded from `user_groups` at startup and
+# refreshed on Postgres `NOTIFY groups_changed`; `_label_stage` now invokes
+# the `Enricher` before pushing to the downstream queue so `LabelledFlow`
+# carries `user_upn` + `groups`. The LCD `GroupAggregator` is still consumed
+# off-path — wiring it into the Sankey publish step is the next follow-up.
 
 
 async def _read_xstream_into(
@@ -67,6 +71,7 @@ async def _label_stage(
     inp: asyncio.Queue[WindowedFlow],
     out: asyncio.Queue[LabelledFlow],
     resolver: AppResolver,
+    enricher: Enricher | None = None,
 ) -> None:
     while True:
         wf: WindowedFlow = await inp.get()
@@ -91,7 +96,54 @@ async def _label_stage(
             lossy=wf.lossy,
             dropped_count=wf.dropped_count,
         )
+        if enricher is not None:
+            # Mutates ``row`` (the dict view) with user_upn + groups; copy back
+            # onto the LabelledFlow's identity fields so downstream stages see
+            # the enrichment without reaching into a dict.
+            row: dict[str, Any] = {"src_ip": lf.src_ip, "ts": lf.bucket_start}
+            enricher.enrich(row)
+            lf.user_upn = row.get("user_upn", "unknown")
+            groups = row.get("groups", frozenset())
+            lf.groups = groups if isinstance(groups, frozenset) else frozenset(groups)
         await out.put(lf)
+
+
+async def _identity_consumer(
+    redis: Redis,
+    stream: str,
+    id_idx: IdentityIndex,
+    group: str = "correlator",
+) -> None:
+    """Consume ``identity.events`` into the in-memory IdentityIndex.
+
+    Mirrors ``_read_xstream_into`` but drives IdentityIndex.insert() directly.
+    XADD-ed events with an ISO-format ``ts`` are coerced to ``datetime``.
+    Updates the ``identity_index_size`` gauge once per batch so the Grafana
+    dashboard can chart it without re-reading internal state.
+    """
+
+    with contextlib.suppress(Exception):
+        await redis.xgroup_create(stream, group, id="0", mkstream=True)
+    consumer = "c1"
+    while True:
+        entries = await redis.xreadgroup(
+            groupname=group,
+            consumername=consumer,
+            streams={stream: ">"},
+            count=500,
+            block=1000,
+        )
+        for _s, msgs in entries:
+            for msg_id, fields in msgs:
+                try:
+                    ev = json.loads(fields["event"])
+                    if isinstance(ev.get("ts"), str):
+                        ev["ts"] = datetime.fromisoformat(ev["ts"])
+                    id_idx.insert(ev)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("identity event parse error: {}", exc)
+                await redis.xack(stream, group, msg_id)
+        IDENTITY_INDEX_SIZE.set(id_idx.size())
 
 
 async def _load_app_resolver(resolver: AppResolver, pool: asyncpg.Pool) -> None:
@@ -165,6 +217,16 @@ async def _run(settings: CorrelatorSettings) -> None:
     resolver = AppResolver(redis=redis)
     await _load_app_resolver(resolver, pool)
 
+    # Identity pipeline (P3 wiring). Dedicated long-lived connection for
+    # GroupIndex so its `LISTEN groups_changed` subscription isn't recycled
+    # by the shared pool; identity consumer populates the in-memory index.
+    id_idx = IdentityIndex()
+    groups_conn = await asyncpg.connect(dsn)
+    grp_idx = GroupIndex(groups_conn)
+    await grp_idx.load()
+    await grp_idx.listen_for_changes()
+    enricher = Enricher(identity_index=id_idx, group_index=grp_idx)
+
     raw_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=settings.queue_max)
     windowed_q: asyncio.Queue[WindowedFlow] = asyncio.Queue(maxsize=settings.queue_max)
     labelled_q_writer: asyncio.Queue[LabelledFlow] = asyncio.Queue(maxsize=settings.queue_max)
@@ -179,8 +241,15 @@ async def _run(settings: CorrelatorSettings) -> None:
 
     tasks = [
         asyncio.create_task(_read_xstream_into(redis, settings.flows_stream, raw_q), name="xread"),
+        asyncio.create_task(
+            _identity_consumer(redis, settings.identity_stream, id_idx),
+            name="identity-consumer",
+        ),
         asyncio.create_task(windower.run(), name="windower"),
-        asyncio.create_task(_label_stage(windowed_q, intermediate_q, resolver), name="labeller"),
+        asyncio.create_task(
+            _label_stage(windowed_q, intermediate_q, resolver, enricher),
+            name="labeller",
+        ),
         asyncio.create_task(
             _demux(intermediate_q, labelled_q_writer, labelled_q_sankey), name="demux"
         ),
@@ -197,6 +266,8 @@ async def _run(settings: CorrelatorSettings) -> None:
     logger.info("correlator shutting down")
     for t in tasks:
         t.cancel()
+    with contextlib.suppress(Exception):
+        await groups_conn.close()
     await pool.close()
     await redis.close()
 
