@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -26,6 +26,11 @@ class LabelledFlow:
     candidate: AppCandidate
     lossy: bool = False
     dropped_count: int = 0
+    # Identity enrichment (P3 followup). Populated by ``Enricher`` after the
+    # AppResolver has produced ``candidate``. ``user_upn == "unknown"`` and
+    # empty ``groups`` when no binding exists for (src_ip, bucket_start).
+    user_upn: str = "unknown"
+    groups: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass
