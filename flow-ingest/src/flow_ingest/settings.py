@@ -17,3 +17,4 @@ class IngestSettings(BaseSettings):
     config_dir: str = "/etc/flowvis/adapters"
     log_level: str = "INFO"
     queue_max: int = 10_000
+    metrics_port: int = 9100

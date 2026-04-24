@@ -14,6 +14,7 @@ class CorrelatorSettings(BaseSettings):
     batch_size: int = 10_000
     flush_ms: int = 500
     log_level: str = "INFO"
+    metrics_port: int = 9100
 
     # Identity + LCD (P3).
     excluded_groups: list[str] = [

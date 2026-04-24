@@ -8,11 +8,13 @@ import uvloop
 from loguru import logger
 from redis.asyncio import Redis
 from ztna_common.adapter_base import FlowAdapter
+from ztna_common.logging_config import configure as configure_logging
 from ztna_common.redis_bus import RedisFlowPublisher
 from ztna_common.syslog_receiver import SyslogReceiver
 
 from flow_ingest.adapters.fortigate_adapter import FortiGateAdapter
 from flow_ingest.adapters.palo_alto_adapter import PaloAltoAdapter
+from flow_ingest.metrics import start_metrics_server
 from flow_ingest.settings import AdapterConfig, IngestSettings, load_adapter_configs
 
 _ADAPTER_REGISTRY: dict[str, type[FlowAdapter]] = {
@@ -39,6 +41,9 @@ async def _drain_adapter(adapter: FlowAdapter) -> None:
 
 
 async def _run(settings: IngestSettings) -> None:
+    configure_logging(settings.log_level)
+    start_metrics_server(settings.metrics_port)
+
     configs = load_adapter_configs(Path(settings.config_dir))
     logger.info("loaded configs: {}", {k: v.enabled for k, v in configs.items()})
 

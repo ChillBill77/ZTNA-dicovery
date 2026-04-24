@@ -8,8 +8,10 @@ from collections.abc import Sequence
 
 from loguru import logger
 from ztna_common.adapter_base import IdentityAdapter
+from ztna_common.logging_config import configure as configure_logging
 
 from id_ingest import adapters as adapters_pkg
+from id_ingest.metrics import start_metrics_server
 from id_ingest.redis_io import make_producer
 from id_ingest.settings import IdIngestSettings
 
@@ -107,6 +109,8 @@ async def _main() -> None:
     """Full runtime: start discovered adapters + group-sync worker + producer."""
 
     settings = IdIngestSettings()
+    configure_logging(settings.log_level)
+    start_metrics_server(settings.metrics_port)
     producer = make_producer(settings.redis_url)
 
     # Instantiate adapters via auto-discovery + settings-driven config.

@@ -151,6 +151,13 @@ async def _demux(src: asyncio.Queue[LabelledFlow], *dsts: asyncio.Queue[Labelled
 
 
 async def _run(settings: CorrelatorSettings) -> None:
+    from ztna_common.logging_config import configure as configure_logging
+
+    from correlator.pipeline.metrics import start_metrics_server
+
+    configure_logging(settings.log_level)
+    start_metrics_server(settings.metrics_port)
+
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     dsn = _as_asyncpg_dsn(settings.database_url)
     pool = await asyncpg.create_pool(dsn, min_size=2, max_size=8)
