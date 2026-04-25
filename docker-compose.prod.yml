@@ -3,13 +3,13 @@
 # Layers on top of docker-compose.yml:
 #   - Let's Encrypt HTTP-01 ACME on Traefik
 #   - Resource limits + json-file log rotation on every service
+#   - Docker secrets mounted at /run/secrets/<name>; services read the file
+#     body via pydantic Settings ``*_FILE`` env-var overrides (see
+#     ``api/src/api/settings.py`` and ``id-ingest/src/id_ingest/settings.py``).
 #
-# Docker secrets wiring for POSTGRES_PASSWORD / ENTRA_CLIENT_SECRET /
-# AD_BIND_PASSWORD / SESSION_SECRET is stubbed below behind a `secrets` block;
-# full `_FILE` env override plumbing (pydantic Settings validator that reads
-# /run/secrets/<name>) is a P4-followup — services currently consume the same
-# env vars as dev. Deployments that need it today should mount the secret
-# files and override env vars inline in this file.
+# Secrets are declared ``external: true`` so deployments create them out of
+# band, e.g.:
+#   echo -n "$pw" | docker secret create ad_bind_password -
 #
 # Requires in .env:
 #   ACME_EMAIL=ops@yourdomain.example
@@ -19,6 +19,16 @@
 
 volumes:
   traefik-certs:
+
+secrets:
+  oidc_client_secret:
+    external: true
+  session_secret:
+    external: true
+  ad_bind_password:
+    external: true
+  entra_client_secret:
+    external: true
 
 x-logging: &logging
   driver: json-file
@@ -56,6 +66,12 @@ services:
   api:
     labels:
       - traefik.http.routers.api.tls.certresolver=letsencrypt
+    secrets:
+      - oidc_client_secret
+      - session_secret
+    environment:
+      OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      SESSION_SECRET_FILE: /run/secrets/session_secret
     deploy:
       resources:
         limits: {cpus: "2.0", memory: 1G}
@@ -68,6 +84,12 @@ services:
     logging: *logging
 
   id-ingest:
+    secrets:
+      - ad_bind_password
+      - entra_client_secret
+    environment:
+      AD_BIND_PASSWORD_FILE: /run/secrets/ad_bind_password
+      ENTRA_CLIENT_SECRET_FILE: /run/secrets/entra_client_secret
     deploy:
       resources:
         limits: {cpus: "1.0", memory: 512M}
