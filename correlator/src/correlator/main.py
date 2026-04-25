@@ -19,6 +19,7 @@ from correlator.pipeline.app_resolver import (
     SaasEntry,
 )
 from correlator.pipeline.enricher import Enricher
+from correlator.pipeline.group_aggregator import GroupAggregator
 from correlator.pipeline.group_index import GroupIndex
 from correlator.pipeline.identity_index import IdentityIndex
 from correlator.pipeline.metrics import IDENTITY_INDEX_SIZE
@@ -226,6 +227,15 @@ async def _run(settings: CorrelatorSettings) -> None:
     await grp_idx.load()
     await grp_idx.listen_for_changes()
     enricher = Enricher(identity_index=id_idx, group_index=grp_idx)
+    aggregator = GroupAggregator(
+        excluded=set(settings.excluded_groups),
+        single_user_floor=settings.single_user_floor,
+    )
+
+    async def _drop_agg_cache(*_args: Any) -> None:
+        aggregator.clear_cache()
+
+    await groups_conn.add_listener("groups_changed", _drop_agg_cache)
 
     raw_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=settings.queue_max)
     windowed_q: asyncio.Queue[WindowedFlow] = asyncio.Queue(maxsize=settings.queue_max)
@@ -237,7 +247,13 @@ async def _run(settings: CorrelatorSettings) -> None:
     writer = Writer(
         inp=labelled_q_writer, pool=pool, batch_size=settings.batch_size, flush_ms=settings.flush_ms
     )
-    sankey_pub = SankeyPublisher(inp=labelled_q_sankey, redis=redis)
+    sankey_pub = SankeyPublisher(
+        inp=labelled_q_sankey,
+        redis=redis,
+        aggregator=aggregator,
+        group_index=grp_idx,
+        group_by="group",
+    )
 
     tasks = [
         asyncio.create_task(_read_xstream_into(redis, settings.flows_stream, raw_q), name="xread"),
