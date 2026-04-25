@@ -2,6 +2,10 @@ import type { SankeyDelta } from "./types";
 
 export type WSFilter = Partial<{
   src_cidr: string; dst_app: string; proto: number; deny_only: boolean;
+  group_by: "group" | "user" | "src_ip";
+  group: string[];
+  user: string;
+  exclude_groups: string;
 }>;
 
 export interface SankeyStreamHandle {
