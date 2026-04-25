@@ -15,9 +15,14 @@ WORKDIR /app
 RUN groupadd --system --gid 1001 ztna \
     && useradd --system --uid 1001 --gid 1001 --no-create-home --shell /usr/sbin/nologin ztna
 
+# Install pinned third-party deps from the uv-generated lockfile first so this
+# layer is cached unless requirements.txt changes (drift-checked in CI).
+COPY api/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 COPY api/pyproject.toml ./
 COPY api/src ./src
-RUN pip install --no-cache-dir .
+# --no-deps: deps are already pinned + installed above; skip re-resolution.
+RUN pip install --no-cache-dir --no-deps .
 COPY --from=web-build /web/dist /app/web-dist
 
 RUN chown -R ztna:ztna /app
