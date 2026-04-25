@@ -35,15 +35,15 @@ tcp:
     id-ingest-ad-tcp:
       loadBalancer:
         servers:
-          - address: "id-ingest:516"
+          - address: "id-ingest:5516"
     id-ingest-ise-tcp:
       loadBalancer:
         servers:
-          - address: "id-ingest:517"
+          - address: "id-ingest:5517"
     id-ingest-clearpass-tcp:
       loadBalancer:
         servers:
-          - address: "id-ingest:518"
+          - address: "id-ingest:5518"
 
 udp:
   routers:
@@ -71,12 +71,12 @@ udp:
     id-ingest-ad-udp:
       loadBalancer:
         servers:
-          - address: "id-ingest:516"
+          - address: "id-ingest:5516"
     id-ingest-ise-udp:
       loadBalancer:
         servers:
-          - address: "id-ingest:517"
+          - address: "id-ingest:5517"
     id-ingest-clearpass-udp:
       loadBalancer:
         servers:
-          - address: "id-ingest:518"
+          - address: "id-ingest:5518"

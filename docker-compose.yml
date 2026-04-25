@@ -136,12 +136,12 @@ services:
       - ./id-ingest/configs:/etc/flowvis/adapters:ro
     networks: [backend]
     expose:
-      - "516/udp"
-      - "516/tcp"
-      - "517/udp"
-      - "517/tcp"
-      - "518/udp"
-      - "518/tcp"
+      - "5516/udp"
+      - "5516/tcp"
+      - "5517/udp"
+      - "5517/tcp"
+      - "5518/udp"
+      - "5518/tcp"
     restart: unless-stopped
 
   resolver:
