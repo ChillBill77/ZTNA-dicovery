@@ -27,8 +27,12 @@ jobs:
       - name: Audit
         run: |
           if [ -f "${{ matrix.service }}/requirements.txt" ]; then
+            # --disable-pip requires either a hashed requirements file or
+            # --no-deps. Our uv-generated lockfiles are fully transitively
+            # pinned (every dep is listed explicitly), so --no-deps is safe
+            # and complete coverage.
             pip-audit -r "${{ matrix.service }}/requirements.txt" \
-              --strict --disable-pip --vulnerability-service osv
+              --strict --disable-pip --no-deps --vulnerability-service osv
           else
             pip-audit "./${{ matrix.service }}" --strict --disable-pip || true
           fi
