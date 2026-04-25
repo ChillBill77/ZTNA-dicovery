@@ -1,6 +1,6 @@
 # Build context is the repo root (see docker-compose.yml: build.context=.).
 # Multi-stage: first build the web SPA, then layer onto the python image.
-FROM node:22-bookworm AS web-build
+FROM node:25-bookworm AS web-build
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
 RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
