@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import type { SankeyLink } from "../api/types";
+import { useRole } from "../auth/useRole";
 import { useDetailsStore } from "../store/detailsStore";
 
 import OverrideModal from "./OverrideModal";
@@ -39,6 +40,7 @@ export default function DetailsPane({ className = "" }: { className?: string }) 
 function LinkTab({ link, openOverride }: { link: SankeyLink; openOverride: () => void }) {
   const src_ip = link.src.replace("ip:", "");
   const dst_app = link.dst.replace("app:", "");
+  const canEdit = useRole("editor");
   const { data } = useQuery({
     queryKey: ["raw", src_ip],
     queryFn: () =>
@@ -50,10 +52,12 @@ function LinkTab({ link, openOverride }: { link: SankeyLink; openOverride: () =>
       <p className="text-sm text-slate-400">
         {link.bytes.toLocaleString()} bytes, {link.flows} flows
       </p>
-      <button
-        className="mt-2 px-2 py-1 bg-slate-700 rounded"
-        onClick={openOverride}
-      >Override label</button>
+      {canEdit ? (
+        <button
+          className="mt-2 px-2 py-1 bg-slate-700 rounded"
+          onClick={openOverride}
+        >Override label</button>
+      ) : null}
       <ul className="mt-2 text-xs font-mono space-y-1" aria-label="raw-flows">
         {data?.items.map((row, i) => (
           <li key={i}>
