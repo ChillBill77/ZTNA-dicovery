@@ -73,11 +73,17 @@ def fixture_path() -> Path:
 
 
 @pytest.fixture
-def session_cookie(compose_stack: dict[str, str]) -> str:
-    """Mint a viewer+editor session cookie via the MOCK_SESSION-only route.
+def auth_session(compose_stack: dict[str, str]) -> dict[str, str]:
+    """Mint a viewer+editor session via the MOCK_SESSION-only route.
 
-    Returns a string suitable for the ``Cookie`` request header
-    (``session=<token>``); pass it on subsequent calls to gated routes.
+    Returns a dict with two pieces tests need together:
+
+    - ``cookie_header``: ready-to-send ``session=<tok>; csrf_token=<csrf>``
+      string for the ``Cookie`` request header. The CsrfMiddleware
+      double-submits ``csrf_token`` between the cookie and an
+      ``X-CSRF-Token`` header, so both halves must travel.
+    - ``csrf_token``: bare value to pass as ``X-CSRF-Token`` on unsafe
+      methods (POST/PUT/DELETE).
     """
 
     import json
@@ -91,4 +97,7 @@ def session_cookie(compose_stack: dict[str, str]) -> str:
     )
     with urllib.request.urlopen(req, timeout=5) as r:
         body = json.loads(r.read())
-    return f"session={body['session']}"
+    return {
+        "cookie_header": f"session={body['session']}; csrf_token={body['csrf_token']}",
+        "csrf_token": body["csrf_token"],
+    }

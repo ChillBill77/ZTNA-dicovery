@@ -28,20 +28,23 @@ pytestmark = pytest.mark.integration
 async def test_pan_flows_reach_db_and_websocket(
     compose_stack,
     fixture_path: Path,
-    session_cookie: str,
+    auth_session: dict[str, str],
 ) -> None:
+    cookie = auth_session["cookie_header"]
     # 1. Replay fixture
     path = fixture_path / "palo_alto" / "traffic_end_sample.csv"
     sent = await replay_udp(path=path, host="localhost", port=5514)
     assert sent > 0
 
-    # 2. Wait up to 15 s for flows to appear in DB
-    deadline = time.monotonic() + 15
+    # 2. Wait up to 30 s for flows to appear in DB. Window flush + correlator
+    # processing varies under CI load; the previous 15 s budget regularly
+    # tripped on green stacks.
+    deadline = time.monotonic() + 30
     count = 0
     while time.monotonic() < deadline:
         req = urllib.request.Request(
             "http://localhost:8000/api/flows/raw?limit=100",
-            headers={"Cookie": session_cookie},
+            headers={"Cookie": cookie},
         )
         with urllib.request.urlopen(req, timeout=3) as r:
             body = json.loads(r.read())
@@ -49,12 +52,12 @@ async def test_pan_flows_reach_db_and_websocket(
         if count > 0:
             break
         await asyncio.sleep(1)
-    assert count > 0, "no flows landed in DB within 15 s"
+    assert count > 0, "no flows landed in DB within 30 s"
 
     # 3. Subscribe to /ws/sankey and wait for a delta
     async with websockets.connect(
         "ws://localhost:8000/ws/sankey",
-        additional_headers=[("Cookie", session_cookie)],
+        additional_headers=[("Cookie", cookie)],
     ) as ws:
         msg = await asyncio.wait_for(ws.recv(), timeout=10)
         delta = json.loads(msg)
@@ -67,8 +70,10 @@ async def test_pan_flows_reach_db_and_websocket(
 async def test_application_override_propagates_within_two_ticks(
     compose_stack,
     fixture_path: Path,
-    session_cookie: str,
+    auth_session: dict[str, str],
 ) -> None:
+    cookie = auth_session["cookie_header"]
+    csrf = auth_session["csrf_token"]
     # Seed flows first
     path = fixture_path / "palo_alto" / "traffic_end_sample.csv"
     await replay_udp(path=path, host="localhost", port=5514)
@@ -88,7 +93,11 @@ async def test_application_override_propagates_within_two_ticks(
         "http://localhost:8000/api/applications",
         method="POST",
         data=json.dumps(override).encode(),
-        headers={"Content-Type": "application/json", "Cookie": session_cookie},
+        headers={
+            "Content-Type": "application/json",
+            "Cookie": cookie,
+            "X-CSRF-Token": csrf,
+        },
     )
     with urllib.request.urlopen(req, timeout=3) as r:
         assert r.status == 201
@@ -99,7 +108,7 @@ async def test_application_override_propagates_within_two_ticks(
     # WS should see our label within 3 ticks (~15 s)
     async with websockets.connect(
         "ws://localhost:8000/ws/sankey",
-        additional_headers=[("Cookie", session_cookie)],
+        additional_headers=[("Cookie", cookie)],
     ) as ws:
         for _ in range(3):
             msg = await asyncio.wait_for(ws.recv(), timeout=10)
