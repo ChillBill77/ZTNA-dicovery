@@ -16,6 +16,13 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+    ports:
+      - "6379:6379"
+
+  id-ingest:
+    ports:
+      - "5516:5516/udp"
+      - "5516:5516/tcp"
 
   flow-ingest:
     environment:
