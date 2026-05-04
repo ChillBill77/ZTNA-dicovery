@@ -168,6 +168,9 @@ jobs:
           sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://ztna:integration@postgres:5432/ztna|' .env
           sed -i 's|^APP_DOMAIN=.*|APP_DOMAIN=localhost|' .env
           sed -i 's|^ACME_EMAIL=.*|ACME_EMAIL=|' .env
+          # Enable test-only login route so integration tests can mint
+          # session cookies for the now-mandatory viewer-role gate.
+          echo "MOCK_SESSION=1" >> .env
       - name: Build and start stack
         env:
           APP_DOMAIN: localhost
@@ -216,6 +219,9 @@ jobs:
           sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://ztna:integration@postgres:5432/ztna|' .env
           sed -i 's|^APP_DOMAIN=.*|APP_DOMAIN=localhost|' .env
           sed -i 's|^ACME_EMAIL=.*|ACME_EMAIL=|' .env
+          # Enable test-only login route so integration tests can mint
+          # session cookies for the now-mandatory viewer-role gate.
+          echo "MOCK_SESSION=1" >> .env
       - name: Build and start stack
         env:
           APP_DOMAIN: localhost

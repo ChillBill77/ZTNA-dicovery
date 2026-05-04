@@ -28,6 +28,7 @@ pytestmark = pytest.mark.integration
 async def test_pan_flows_reach_db_and_websocket(
     compose_stack,
     fixture_path: Path,
+    session_cookie: str,
 ) -> None:
     # 1. Replay fixture
     path = fixture_path / "palo_alto" / "traffic_end_sample.csv"
@@ -38,7 +39,10 @@ async def test_pan_flows_reach_db_and_websocket(
     deadline = time.monotonic() + 15
     count = 0
     while time.monotonic() < deadline:
-        req = urllib.request.Request("http://localhost:8000/api/flows/raw?limit=100")
+        req = urllib.request.Request(
+            "http://localhost:8000/api/flows/raw?limit=100",
+            headers={"Cookie": session_cookie},
+        )
         with urllib.request.urlopen(req, timeout=3) as r:
             body = json.loads(r.read())
         count = len(body["items"])
@@ -48,7 +52,10 @@ async def test_pan_flows_reach_db_and_websocket(
     assert count > 0, "no flows landed in DB within 15 s"
 
     # 3. Subscribe to /ws/sankey and wait for a delta
-    async with websockets.connect("ws://localhost:8000/ws/sankey") as ws:
+    async with websockets.connect(
+        "ws://localhost:8000/ws/sankey",
+        additional_headers=[("Cookie", session_cookie)],
+    ) as ws:
         msg = await asyncio.wait_for(ws.recv(), timeout=10)
         delta = json.loads(msg)
         assert "links" in delta
@@ -60,6 +67,7 @@ async def test_pan_flows_reach_db_and_websocket(
 async def test_application_override_propagates_within_two_ticks(
     compose_stack,
     fixture_path: Path,
+    session_cookie: str,
 ) -> None:
     # Seed flows first
     path = fixture_path / "palo_alto" / "traffic_end_sample.csv"
@@ -80,7 +88,7 @@ async def test_application_override_propagates_within_two_ticks(
         "http://localhost:8000/api/applications",
         method="POST",
         data=json.dumps(override).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Cookie": session_cookie},
     )
     with urllib.request.urlopen(req, timeout=3) as r:
         assert r.status == 201
@@ -89,7 +97,10 @@ async def test_application_override_propagates_within_two_ticks(
     await replay_udp(path=path, host="localhost", port=5514)
 
     # WS should see our label within 3 ticks (~15 s)
-    async with websockets.connect("ws://localhost:8000/ws/sankey") as ws:
+    async with websockets.connect(
+        "ws://localhost:8000/ws/sankey",
+        additional_headers=[("Cookie", session_cookie)],
+    ) as ws:
         for _ in range(3):
             msg = await asyncio.wait_for(ws.recv(), timeout=10)
             delta = json.loads(msg)

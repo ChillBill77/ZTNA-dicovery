@@ -50,6 +50,10 @@ def compose_stack() -> Iterator[dict[str, str]]:
     )
     env.setdefault("REDIS_URL", "redis://redis:6379/0")
     env.setdefault("ACME_EMAIL", "")
+    # Enable the gated /api/test/login-as route so integration tests can mint
+    # session cookies for the (now mandatory) viewer-role gate on data routes.
+    env.setdefault("MOCK_SESSION", "1")
+    env.setdefault("SESSION_SECRET", "y" * 32)
 
     _compose(env, "up", "-d", "--build")
     try:
@@ -66,3 +70,27 @@ def compose_stack() -> Iterator[dict[str, str]]:
 @pytest.fixture
 def fixture_path() -> Path:
     return FIXTURE_ROOT
+
+
+@pytest.fixture
+def session_cookie(compose_stack: dict[str, str]) -> str:
+    """Mint a viewer+editor session cookie via the MOCK_SESSION-only route.
+
+    Returns a string suitable for the ``Cookie`` request header
+    (``session=<token>``); pass it on subsequent calls to gated routes.
+    """
+
+    import json
+    import urllib.request
+
+    req = urllib.request.Request(
+        "http://localhost:8000/api/test/login-as",
+        method="POST",
+        data=json.dumps(
+            {"upn": "tester@example.com", "roles": ["viewer", "editor"]}
+        ).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=5) as r:
+        body = json.loads(r.read())
+    return f"session={body['session']}"
