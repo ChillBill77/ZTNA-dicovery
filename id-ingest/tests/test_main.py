@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from id_ingest.main import discover_adapters, run_once
 
 

@@ -14,10 +14,9 @@ AD mock or chunked fixture loader is no longer required for that path.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
-
 from id_ingest.group_sync.ad_sync import AdGroupSync
 
 
@@ -55,10 +54,7 @@ class _FakeConn:
         search_scope: Any = None,
         attributes: list[str] | None = None,
     ) -> None:
-        if (
-            "userPrincipalName=" in search_filter
-            or "sAMAccountName=" in search_filter
-        ):
+        if "userPrincipalName=" in search_filter or "sAMAccountName=" in search_filter:
             self.entries = [_Entry(dn=self._user_dn, attrs={})]
             return
         # Non-ranged retrieval: return all memberOf values, no ranged attr name.
@@ -102,7 +98,7 @@ async def test_small_group_flatten() -> None:
 @pytest.mark.asyncio
 async def test_unknown_upn_returns_empty() -> None:
     class _EmptyConn:
-        entries: list[Any] = []
+        entries: ClassVar[list[Any]] = []
 
         def search(self, *args: Any, **kwargs: Any) -> None:
             self.entries = []
@@ -170,10 +166,7 @@ async def test_range_retrieval_walks_chunks() -> None:
             search_scope: Any = None,
             attributes: list[str] | None = None,
         ) -> None:
-            if (
-                "userPrincipalName=" in search_filter
-                or "sAMAccountName=" in search_filter
-            ):
+            if "userPrincipalName=" in search_filter or "sAMAccountName=" in search_filter:
                 self.entries = [_Entry(dn=self._user_dn, attrs={})]
                 return
             # memberOf retrieval — first call returns the bounded range,
@@ -196,9 +189,7 @@ async def test_range_retrieval_walks_chunks() -> None:
         bind_dn="cn=svc",
         bind_password="x",
         base_dn="dc=example",
-        connection_factory=lambda: _PaginatedConn(
-            user_dn="CN=carol,OU=Users,DC=example"
-        ),
+        connection_factory=lambda: _PaginatedConn(user_dn="CN=carol,OU=Users,DC=example"),
     )
     upserts = await sync.sync_user("carol@example")
     assert len(upserts) == 1547

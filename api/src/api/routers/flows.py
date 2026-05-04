@@ -147,9 +147,7 @@ async def sankey(
         }
 
     exclude_set = (
-        {g.strip() for g in exclude_groups.split(",") if g.strip()}
-        if exclude_groups
-        else None
+        {g.strip() for g in exclude_groups.split(",") if g.strip()} if exclude_groups else None
     )
     group_set = {g for g in group if g} or None
     filtered = _filter_links(

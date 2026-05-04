@@ -11,11 +11,7 @@ FIX = Path(__file__).parent.parent / "fixtures" / "identity"
 
 
 def _load(name: str) -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in (FIX / name).read_text().splitlines()
-        if line.strip()
-    ]
+    return [json.loads(line) for line in (FIX / name).read_text().splitlines() if line.strip()]
 
 
 def test_resolve_picks_highest_confidence_within_ttl() -> None:
@@ -94,9 +90,7 @@ def test_expired_ttl_evicted() -> None:
     for ev in events:
         idx.insert(ev)
     ip = events[0]["src_ip"]
-    probe = datetime.fromisoformat(events[0]["ts"].replace("Z", "+00:00")) + timedelta(
-        seconds=120
-    )
+    probe = datetime.fromisoformat(events[0]["ts"].replace("Z", "+00:00")) + timedelta(seconds=120)
     assert idx.resolve(ip, probe) is None
     assert idx.size() == 0
 

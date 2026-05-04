@@ -65,9 +65,7 @@ class GroupSyncWorker:
             self._metrics("group_sync_last_full_cycle_seconds", elapsed)
 
     def start(self) -> None:
-        self._sched.add_job(
-            self._full_cycle, CronTrigger.from_crontab(self._cron)
-        )
+        self._sched.add_job(self._full_cycle, CronTrigger.from_crontab(self._cron))
         self._sched.start()
 
     async def aclose(self) -> None:

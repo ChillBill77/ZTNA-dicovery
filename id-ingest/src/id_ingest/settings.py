@@ -6,7 +6,6 @@ from pathlib import Path
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 # Mapping from ``{SECRET}_FILE`` env var → Settings field. In production the
 # prod compose overlay mounts Docker secrets at /run/secrets/<name> and sets
 # the corresponding ``*_FILE`` env so the pydantic model reads the file body
@@ -55,7 +54,7 @@ class IdIngestSettings(BaseSettings):
     metrics_port: int = 9100
 
     @model_validator(mode="after")
-    def _load_from_files(self) -> "IdIngestSettings":
+    def _load_from_files(self) -> IdIngestSettings:
         """Resolve ``{FIELD}_FILE`` env vars after normal env parsing.
 
         For each entry in ``_FILE_OVERRIDES``: if the env var names an existing

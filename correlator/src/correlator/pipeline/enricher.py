@@ -19,9 +19,7 @@ class Enricher:
     for a given ``(src_ip, ts)`` against the ``IdentityIndex`` tree.
     """
 
-    def __init__(
-        self, *, identity_index: _IdentityIndex, group_index: _GroupIndex
-    ) -> None:
+    def __init__(self, *, identity_index: _IdentityIndex, group_index: _GroupIndex) -> None:
         self._id = identity_index
         self._gi = group_index
 

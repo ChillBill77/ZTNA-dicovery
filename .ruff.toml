@@ -6,12 +6,20 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM", "PL", "RUF"]
 ignore = ["PLR0913"]
 
 [lint.per-file-ignores]
-"**/tests/**" = ["PLR2004", "S101", "E741", "PLW0108", "RUF059", "PLC0415"]
-"**/tests/*" = ["PLR2004", "S101", "E741", "PLW0108", "RUF059", "PLC0415"]
-"tests/*" = ["PLR2004", "S101", "E741", "PLW0108", "RUF059", "PLC0415"]
-# FastAPI routes use Depends/Query in defaults by design.
+# Tests intentionally use magic numbers, asserts, blind-Exception checks,
+# and lazy imports for fixture wiring.
+"**/tests/**" = ["PLR2004", "S101", "E741", "PLW0108", "RUF059", "PLC0415", "B017"]
+"**/tests/*" = ["PLR2004", "S101", "E741", "PLW0108", "RUF059", "PLC0415", "B017"]
+"tests/*" = ["PLR2004", "S101", "E741", "PLW0108", "RUF059", "PLC0415", "B017"]
+# FastAPI routes/auth use Depends/Query in defaults by design.
 "api/src/api/routers/*.py" = ["B008"]
-"api/src/api/dependencies.py" = ["B008"]
+"api/src/api/dependencies.py" = ["B008", "PLC0415"]
+"api/src/api/auth/*.py" = ["B008", "PLC0415"]
+# Service entrypoints lazy-import optional adapters / sub-services so a
+# missing dep in one component never breaks startup of the others.
+"**/main.py" = ["PLC0415", "PLR0911", "PLR0912"]
+# Hot-path complex aggregators tolerate slightly higher branching.
+"correlator/src/correlator/pipeline/group_aggregator.py" = ["PLR0912"]
 
 [format]
 quote-style = "double"

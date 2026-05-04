@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi.testclient import TestClient
-
+from api.auth.roles import _current_user_proxy
 from api.main import build_app
 from api.routers.identity import _identity_service
+from fastapi.testclient import TestClient
 
 
 class _FakeIdSvc:
@@ -20,6 +20,11 @@ class _FakeIdSvc:
 def _app_with_identity(result: dict[str, Any] | None) -> TestClient:
     app = build_app()
     app.dependency_overrides[_identity_service] = lambda: _FakeIdSvc(result)
+    # Bypass auth — these unit tests exercise router logic only.
+    app.dependency_overrides[_current_user_proxy] = lambda: {
+        "user_upn": "tester@example.com",
+        "roles": {"viewer", "editor", "admin"},
+    }
     return TestClient(app)
 
 

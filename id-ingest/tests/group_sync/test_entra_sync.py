@@ -5,7 +5,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-
 from id_ingest.group_sync.entra_sync import EntraGroupSync
 
 FIX = Path(__file__).parent.parent / "fixtures" / "graph_groups"

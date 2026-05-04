@@ -36,9 +36,7 @@ class AdGroupSync:
         if self.connection_factory is not None:
             return self.connection_factory()
         srv = Server(self.ldap_url, get_info=ALL)
-        return Connection(
-            srv, user=self.bind_dn, password=self.bind_password, auto_bind=True
-        )
+        return Connection(srv, user=self.bind_dn, password=self.bind_password, auto_bind=True)
 
     def _read_memberof(self, conn: Connection, user_dn: str) -> list[str]:
         groups: list[str] = []
@@ -46,18 +44,14 @@ class AdGroupSync:
         # AD returns groups in 1500-value chunks via `memberOf;range=X-Y`; walk
         # ranges until the terminating `*` attribute name is seen.
         while True:
-            conn.search(
-                user_dn, "(objectClass=user)", SUBTREE, attributes=[attr]
-            )
+            conn.search(user_dn, "(objectClass=user)", SUBTREE, attributes=[attr])
             entries: Any = conn.entries
             if not entries:
                 break
             entry = entries[0]
             values = getattr(entry, attr).values if hasattr(entry, attr) else []
             groups.extend(values)
-            ranged_attrs = [
-                k for k in entry.entry_attributes if _RANGE.match(k)
-            ]
+            ranged_attrs = [k for k in entry.entry_attributes if _RANGE.match(k)]
             if not ranged_attrs:
                 break
             m = _RANGE.match(ranged_attrs[0])

@@ -36,9 +36,7 @@ def _codec(settings: Settings) -> SessionCodec:
 
 
 def _jwks(settings: Settings) -> JwksCache:
-    return JwksCache(
-        settings.oidc_issuer.rstrip("/") + "/.well-known/openid-configuration"
-    )
+    return JwksCache(settings.oidc_issuer.rstrip("/") + "/.well-known/openid-configuration")
 
 
 @router.get("/api/auth/login")
@@ -129,9 +127,7 @@ async def current_user(request: Request) -> dict[str, Any]:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         return {
             "user_upn": claims.get("upn", claims.get("sub", "unknown")),
-            "roles": roles_from_groups(
-                claims.get("groups", []), _role_map(settings)
-            ),
+            "roles": roles_from_groups(claims.get("groups", []), _role_map(settings)),
         }
 
     # 2. Cookie session path — for browser clients.
@@ -161,12 +157,8 @@ async def verify(
     # Traefik sets X-Forwarded-Uri to the originally-requested path when using
     # forwardAuth. Dashboard traffic (/traefik/*) is gated to the admin role.
     forwarded_uri = request.headers.get("x-forwarded-uri", "")
-    if forwarded_uri.startswith("/traefik") and "admin" not in user.get(
-        "roles", set()
-    ):
-        raise HTTPException(
-            status_code=403, detail="admin role required for /traefik"
-        )
+    if forwarded_uri.startswith("/traefik") and "admin" not in user.get("roles", set()):
+        raise HTTPException(status_code=403, detail="admin role required for /traefik")
     r = JSONResponse(content={})
     r.headers["X-User"] = user["user_upn"]
     r.headers["X-Roles"] = ",".join(sorted(user["roles"]))

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+from api.middleware_csrf import CsrfMiddleware
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from api.middleware_csrf import CsrfMiddleware
 
 
 def _build() -> TestClient:

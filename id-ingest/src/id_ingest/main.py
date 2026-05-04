@@ -89,9 +89,7 @@ def _build_adapter(
         if not settings.entra_tenant_id:
             logger.info("entra_signin skipped: ENTRA_TENANT_ID not set")
             return None
-        corp_cidrs = [
-            c.strip() for c in settings.entra_corp_cidrs.split(",") if c.strip()
-        ]
+        corp_cidrs = [c.strip() for c in settings.entra_corp_cidrs.split(",") if c.strip()]
         return from_config(  # type: ignore[no-any-return]
             {
                 "tenant_id": settings.entra_tenant_id,
@@ -119,7 +117,7 @@ async def _main() -> None:
     for cls in discovered:
         try:
             a = _build_adapter(cls, settings)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("adapter {} build failed: {}", cls.name, exc)
             continue
         if a is not None:
@@ -162,7 +160,7 @@ async def _main() -> None:
 
             pg = await asyncpg.connect(settings.database_url)
             notifier = GroupChangeNotifier(pg)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("notifier init failed; refresh+NOTIFY disabled: {}", exc)
 
     worker = GroupSyncWorker(

@@ -19,9 +19,7 @@ class IdentityService:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def resolve(
-        self, src_ip: str, at: datetime
-    ) -> dict[str, Any] | None:
+    async def resolve(self, src_ip: str, at: datetime) -> dict[str, Any] | None:
         sql = text(
             """
             SELECT user_upn, source, confidence, ttl_seconds, time
@@ -38,10 +36,7 @@ class IdentityService:
         if not row:
             return None
         groups_result = await self._db.execute(
-            text(
-                "SELECT group_name FROM user_groups "
-                "WHERE user_upn = :u ORDER BY group_name"
-            ),
+            text("SELECT group_name FROM user_groups WHERE user_upn = :u ORDER BY group_name"),
             {"u": row["user_upn"]},
         )
         groups = [g[0] for g in groups_result.all()]

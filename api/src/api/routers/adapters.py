@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 from datetime import UTC, datetime
 
@@ -32,13 +33,14 @@ async def adapters() -> list[AdapterHealth]:
 
 async def _group_sync_age(session: AsyncSession) -> float | None:
     row = (
-        await session.execute(
-            text("SELECT MAX(refreshed_at) AS latest FROM user_groups")
-        )
-    ).mappings().first()
+        (await session.execute(text("SELECT MAX(refreshed_at) AS latest FROM user_groups")))
+        .mappings()
+        .first()
+    )
     if not row or row["latest"] is None:
         return None
-    delta = datetime.now(UTC) - row["latest"]
+    latest: datetime = row["latest"]
+    delta = datetime.now(UTC) - latest
     return max(0.0, delta.total_seconds())
 
 
@@ -48,14 +50,10 @@ async def stats(session: AsyncSession = Depends(db_session)) -> Stats:
     raw = await redis.get("stats.global")
     base = Stats()
     if raw:
-        try:
+        with contextlib.suppress(Exception):
             base = Stats(**json.loads(raw))
-        except Exception:
-            pass
     # Override identity-related field from live DB so operators always see a
     # current value even when the aggregator hasn't published a refresh.
-    try:
+    with contextlib.suppress(Exception):
         base.group_sync_age_seconds = await _group_sync_age(session)
-    except Exception:  # noqa: BLE001 — stat is best-effort, never block response
-        pass
     return base

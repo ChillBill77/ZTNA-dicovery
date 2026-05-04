@@ -6,9 +6,8 @@ Playwright E2E; they must never be reachable in production.
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
-
 from api.main import build_app
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture

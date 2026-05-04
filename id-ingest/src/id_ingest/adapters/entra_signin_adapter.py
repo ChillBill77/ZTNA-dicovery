@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime
 from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import httpx
 from loguru import logger
@@ -28,7 +28,7 @@ class EntraSigninAdapter(IdentityAdapter):
         client_secret: str,
         corp_cidrs: list[IPv4Network | IPv6Network],
         *,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
         poll_interval_s: int = 60,
     ) -> None:
         self._tid = tenant_id
@@ -41,14 +41,14 @@ class EntraSigninAdapter(IdentityAdapter):
 
     @classmethod
     def from_config(cls, cfg: dict[str, object]) -> EntraSigninAdapter:
-        raw_cidrs = cfg.get("corp_cidrs", []) or []
-        cidrs = [ip_network(c) for c in raw_cidrs]  # type: ignore[union-attr]
+        raw_cidrs = cast("list[str]", cfg.get("corp_cidrs", []) or [])
+        cidrs = [ip_network(c) for c in raw_cidrs]
         return cls(
             tenant_id=str(cfg["tenant_id"]),
             client_id=str(cfg["client_id"]),
             client_secret=str(cfg["client_secret"]),
             corp_cidrs=cidrs,
-            poll_interval_s=int(cfg.get("poll_interval_s", 60)),  # type: ignore[arg-type]
+            poll_interval_s=int(cast("int | str", cfg.get("poll_interval_s", 60))),
         )
 
     async def _token(self) -> str:
@@ -75,13 +75,10 @@ class EntraSigninAdapter(IdentityAdapter):
     async def poll_once(self) -> AsyncIterator[IdentityEvent]:
         token = await self._token()
         url: str | None = (
-            self._delta_link
-            or f"{GRAPH_BASE}/auditLogs/signIns?$filter=status/errorCode eq 0"
+            self._delta_link or f"{GRAPH_BASE}/auditLogs/signIns?$filter=status/errorCode eq 0"
         )
         while url:
-            r = await self._client.get(
-                url, headers={"Authorization": f"Bearer {token}"}
-            )
+            r = await self._client.get(url, headers={"Authorization": f"Bearer {token}"})
             r.raise_for_status()
             body = r.json()
             for item in body.get("value", []):
@@ -91,9 +88,7 @@ class EntraSigninAdapter(IdentityAdapter):
                 upn = item.get("userPrincipalName")
                 if not ip or not upn:
                     continue
-                ts = datetime.fromisoformat(
-                    item["createdDateTime"].replace("Z", "+00:00")
-                )
+                ts = datetime.fromisoformat(item["createdDateTime"].replace("Z", "+00:00"))
                 yield IdentityEvent(
                     ts=ts,
                     src_ip=ip,
@@ -114,7 +109,7 @@ class EntraSigninAdapter(IdentityAdapter):
             try:
                 async for ev in self.poll_once():
                     yield ev
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("entra_signin poll error: {}", exc)
             await asyncio.sleep(self._poll)
 

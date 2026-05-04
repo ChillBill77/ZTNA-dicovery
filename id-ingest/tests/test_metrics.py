@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from prometheus_client import generate_latest
-
 from id_ingest.metrics import (
     GROUP_SYNC_LAST_FULL_CYCLE_SECONDS,
     IDENTITY_INGEST_EVENTS,
     REGISTRY,
 )
+from prometheus_client import generate_latest
 
 
 def test_events_counter_is_exposed() -> None:

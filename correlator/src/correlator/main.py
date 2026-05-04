@@ -141,7 +141,7 @@ async def _identity_consumer(
                     if isinstance(ev.get("ts"), str):
                         ev["ts"] = datetime.fromisoformat(ev["ts"])
                     id_idx.insert(ev)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("identity event parse error: {}", exc)
                 await redis.xack(stream, group, msg_id)
         IDENTITY_INDEX_SIZE.set(id_idx.size())

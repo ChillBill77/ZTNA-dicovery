@@ -85,11 +85,7 @@ def test_aggregator_buckets_rows_into_lcd_strands() -> None:
         },
     ]
     links = agg.aggregate(rows, group_sizes=sizes, group_by="group")
-    matches = [
-        link
-        for link in links
-        if link["src"] == "Sales" and link["dst"] == "app:m365"
-    ]
+    matches = [link for link in links if link["src"] == "Sales" and link["dst"] == "app:m365"]
     assert len(matches) == 1
     assert matches[0]["users"] == 2
     assert matches[0]["bytes"] == 300

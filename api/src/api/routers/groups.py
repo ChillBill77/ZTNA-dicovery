@@ -29,9 +29,7 @@ async def get_group(
     svc: GroupsService = Depends(_groups_service),
 ) -> GroupMembers:
     try:
-        result = await svc.get_members(
-            group_id, cursor=cursor, page_size=page_size
-        )
+        result = await svc.get_members(group_id, cursor=cursor, page_size=page_size)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if result is None:

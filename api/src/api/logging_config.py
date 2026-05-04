@@ -3,14 +3,16 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import sys
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
+if TYPE_CHECKING:
+    from loguru import Record
+
 _PII_KEYS = {"upn", "src_ip", "user_upn", "ip"}
-_trace_id: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "trace_id", default=""
-)
+_trace_id: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="")
 
 
 def set_trace_id(traceparent: str) -> None:
@@ -20,8 +22,9 @@ def set_trace_id(traceparent: str) -> None:
     Format: ``00-<trace-id>-<span-id>-<flags>``.
     """
 
+    _TRACEPARENT_MIN_PARTS = 2  # ``00-<trace-id>...``: need at least version + tid
     parts = traceparent.split("-")
-    tid = parts[1] if len(parts) >= 2 else traceparent
+    tid = parts[1] if len(parts) >= _TRACEPARENT_MIN_PARTS else traceparent
     _trace_id.set(tid)
 
 
@@ -47,9 +50,11 @@ def _processor(record: dict[str, Any]) -> bool:
 
 def configure_logging(level: str = "INFO") -> None:
     logger.remove()
+    # _processor takes a structurally-compatible record dict; loguru's stricter
+    # type stub expects Callable[[Record], bool]. Cast keeps both happy.
     logger.add(
         sys.stdout,
         level=level,
         serialize=True,
-        filter=_processor,
+        filter=cast("Callable[[Record], bool]", _processor),
     )

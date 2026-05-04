@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from id_ingest.adapters.ad_4624_adapter import Ad4624Adapter
 
 FIX = Path(__file__).parent.parent / "fixtures" / "ad_4624"

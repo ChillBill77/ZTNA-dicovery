@@ -38,13 +38,14 @@ async def verify_jwt(
     except KeyError as exc:
         raise InvalidToken(f"unknown kid: {kid}") from exc
     try:
-        return jwt.decode(
+        decoded: dict[str, Any] = jwt.decode(
             token,
             key,
             algorithms=["RS256"],
             audience=audience,
             issuer=issuer,
         )
+        return decoded
     except ExpiredSignatureError as exc:
         raise InvalidToken("expired") from exc
     except JWTError as exc:

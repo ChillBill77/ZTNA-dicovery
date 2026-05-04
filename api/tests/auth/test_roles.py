@@ -3,10 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from api.auth.roles import RoleMap, require_role, roles_from_groups
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-
-from api.auth.roles import RoleMap, require_role, roles_from_groups
 
 ROLE_MAP = RoleMap(viewer={"g-view"}, editor={"g-edit"}, admin={"g-admin"})
 
@@ -69,9 +68,7 @@ def test_require_role_allows_same_role(app: FastAPI) -> None:
 def test_require_role_promotes_higher(app: FastAPI) -> None:
     from api.auth.roles import _current_user_proxy
 
-    app.dependency_overrides[_current_user_proxy] = _with_roles(
-        {"admin", "editor", "viewer"}
-    )
+    app.dependency_overrides[_current_user_proxy] = _with_roles({"admin", "editor", "viewer"})
     client = TestClient(app)
     assert client.get("/viewer").status_code == 200
     assert client.get("/editor").status_code == 200
