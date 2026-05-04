@@ -4,9 +4,12 @@ import contextvars
 import hashlib
 import sys
 from collections.abc import Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from loguru import Record, logger
+from loguru import logger
+
+if TYPE_CHECKING:
+    from loguru import Record
 
 _PII_KEYS = {"upn", "src_ip", "user_upn", "ip"}
 _trace_id: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="")
