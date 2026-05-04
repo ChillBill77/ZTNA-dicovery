@@ -86,9 +86,7 @@ def session_cookie(compose_stack: dict[str, str]) -> str:
     req = urllib.request.Request(
         "http://localhost:8000/api/test/login-as",
         method="POST",
-        data=json.dumps(
-            {"upn": "tester@example.com", "roles": ["viewer", "editor"]}
-        ).encode(),
+        data=json.dumps({"upn": "tester@example.com", "roles": ["viewer", "editor"]}).encode(),
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=5) as r:
