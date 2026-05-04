@@ -36,8 +36,18 @@ jobs:
         run: ruff format --check .
       - name: Mypy
         run: mypy api/src migrate/alembic common/src flow-ingest/src id-ingest/src resolver/src correlator/src
-      - name: Pytest (unit)
-        run: pytest common/tests api/tests flow-ingest/tests id-ingest/tests resolver/tests correlator/tests -v
+      - name: Pytest (unit) — per service
+        # Each service's `tests/__init__.py` makes pytest register its conftest
+        # under the bare module name `tests.conftest`, which collides when
+        # multiple services are passed to a single pytest invocation. Running
+        # them sequentially gives each service its own plugin registry.
+        run: |
+          set -e
+          for svc in common api flow-ingest id-ingest resolver correlator; do
+            echo "::group::pytest ${svc}/tests"
+            pytest "${svc}/tests" -v
+            echo "::endgroup::"
+          done
 
   lockfile-drift:
     # Recompiles each Python service's requirements.txt from its pyproject.toml
