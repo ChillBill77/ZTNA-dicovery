@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
   "pydantic==2.9.2",
   "pydantic-settings==2.5.2",
-  "redis==5.1.0",
+  "redis==7.4.0",
   "asyncpg==0.29.0",
   "loguru==0.7.2",
   "uvloop==0.20.0",
