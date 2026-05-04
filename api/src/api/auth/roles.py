@@ -59,9 +59,7 @@ def require_role(role: str) -> Any:
 
     def _dep(user: dict[str, Any] = Depends(_current_user_proxy)) -> dict[str, Any]:
         if role not in user.get("roles", set()):
-            raise HTTPException(
-                status_code=403, detail=f"role '{role}' required"
-            )
+            raise HTTPException(status_code=403, detail=f"role '{role}' required")
         return user
 
     return Depends(_dep)

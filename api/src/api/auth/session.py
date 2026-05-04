@@ -29,9 +29,7 @@ class SessionCodec:
 
     def __init__(self, secret: str, ttl_s: int = 8 * 3600) -> None:
         if len(secret) < self.MIN_SECRET_BYTES:
-            raise ValueError(
-                f"session secret must be ≥ {self.MIN_SECRET_BYTES} bytes"
-            )
+            raise ValueError(f"session secret must be ≥ {self.MIN_SECRET_BYTES} bytes")
         self._serializer = URLSafeTimedSerializer(secret, salt="ztna-session")
         self._ttl = ttl_s
 

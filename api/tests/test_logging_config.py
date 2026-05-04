@@ -4,9 +4,8 @@ import json
 import sys
 
 import pytest
-from loguru import logger
-
 from api.logging_config import configure_logging, set_trace_id
+from loguru import logger
 
 
 @pytest.fixture(autouse=True)
@@ -41,9 +40,7 @@ def test_debug_log_keeps_raw_pii(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_trace_id_propagated(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging("INFO")
-    set_trace_id(
-        "00-abcdef1234567890abcdef1234567890-1111111111111111-01"
-    )
+    set_trace_id("00-abcdef1234567890abcdef1234567890-1111111111111111-01")
     logger.info("with trace")
     sys.stderr.flush()
     out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])

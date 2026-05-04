@@ -18,7 +18,5 @@ class GroupChangeNotifier:
         self._conn = conn
 
     async def refresh_and_notify(self) -> None:
-        await self._conn.execute(
-            "REFRESH MATERIALIZED VIEW CONCURRENTLY group_members;"
-        )
+        await self._conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY group_members;")
         await self._conn.execute("NOTIFY groups_changed;")

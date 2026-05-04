@@ -15,7 +15,7 @@ import asyncio
 import json
 import socket
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import redis.asyncio as redis_async
@@ -28,9 +28,7 @@ AD_SYSLOG_PORT = 5516
 REDIS_URL = "redis://localhost:6379/0"
 
 
-def _build_winlogbeat_4624(
-    *, src_ip: str, user: str, domain: str, logon_type: str = "10"
-) -> bytes:
+def _build_winlogbeat_4624(*, src_ip: str, user: str, domain: str, logon_type: str = "10") -> bytes:
     """Mint a single Winlogbeat-style syslog frame the ad_4624 adapter parses.
 
     The adapter strips a leading ``proc[pid]: `` prefix before JSON-decoding,
@@ -38,7 +36,7 @@ def _build_winlogbeat_4624(
     """
 
     payload = {
-        "@timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "@timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "event_id": 4624,
         "winlog": {
             "event_data": {
@@ -62,9 +60,7 @@ async def test_ad_4624_syslog_lands_in_identity_stream(
     try:
         # Snapshot existing stream length so the assertion is robust to any
         # baseline events emitted during compose bring-up.
-        baseline = await client.xlen(IDENTITY_STREAM) if await client.exists(
-            IDENTITY_STREAM
-        ) else 0
+        baseline = await client.xlen(IDENTITY_STREAM) if await client.exists(IDENTITY_STREAM) else 0
 
         frame = _build_winlogbeat_4624(
             src_ip="10.99.0.42",
@@ -87,9 +83,9 @@ async def test_ad_4624_syslog_lands_in_identity_stream(
         deadline = time.monotonic() + 15
         latest = baseline
         while time.monotonic() < deadline:
-            latest = await client.xlen(IDENTITY_STREAM) if await client.exists(
-                IDENTITY_STREAM
-            ) else 0
+            latest = (
+                await client.xlen(IDENTITY_STREAM) if await client.exists(IDENTITY_STREAM) else 0
+            )
             if latest > baseline:
                 break
             await asyncio.sleep(0.5)

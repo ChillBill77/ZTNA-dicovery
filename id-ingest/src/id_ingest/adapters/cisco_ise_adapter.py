@@ -39,11 +39,7 @@ class CiscoIseAdapter(IdentityAdapter):
             if not ip or not user or status not in {"Start", "Stop"}:
                 return None
             ts = datetime.now(tz=UTC)
-            ttl = (
-                0
-                if status == "Stop"
-                else int(kv.get("Session-Timeout", str(DEFAULT_TTL)))
-            )
+            ttl = 0 if status == "Stop" else int(kv.get("Session-Timeout", str(DEFAULT_TTL)))
             return IdentityEvent(
                 ts=ts,
                 src_ip=ip,
@@ -55,7 +51,7 @@ class CiscoIseAdapter(IdentityAdapter):
                 mac=kv.get("Calling-Station-ID"),
                 raw_id=kv.get("Acct-Session-Id"),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("cisco_ise parse error: {}", exc)
             return None
 

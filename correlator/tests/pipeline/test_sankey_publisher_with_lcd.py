@@ -10,12 +10,12 @@ without spinning up a pubsub subscriber.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-
 from correlator.pipeline.app_resolver import AppCandidate
 from correlator.pipeline.group_aggregator import GroupAggregator
 from correlator.pipeline.metrics import (
@@ -120,10 +120,8 @@ async def _drive_publisher(
             break
         await asyncio.sleep(0.01)
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     deltas = [json.loads(payload) for _ch, payload in redis.published]
     return redis, deltas
@@ -155,9 +153,7 @@ async def test_single_user_one_group_emits_single_lcd_link() -> None:
             flow_count=2,
         )
     ]
-    _redis, deltas = await _drive_publisher(
-        flows, aggregator=agg, group_index=gi
-    )
+    _redis, deltas = await _drive_publisher(flows, aggregator=agg, group_index=gi)
     assert len(deltas) == 1
     delta = deltas[0]
     assert delta["window_s"] == 5
@@ -197,9 +193,7 @@ async def test_two_users_sharing_group_collapse_to_one_lcd_link_users_two() -> N
             flow_count=2,
         ),
     ]
-    _redis, deltas = await _drive_publisher(
-        flows, aggregator=agg, group_index=gi
-    )
+    _redis, deltas = await _drive_publisher(flows, aggregator=agg, group_index=gi)
     assert len(deltas) == 1
     links = deltas[0]["links"]
     sales = [l for l in links if l["src"] == "g:sales" and l["dst"] == "app:M365"]
@@ -232,9 +226,7 @@ async def test_lcd_miss_falls_back_to_per_user_strands_and_increments_metric() -
         ),
     ]
     before_miss = CORRELATOR_LCD_MISS._value.get()  # type: ignore[attr-defined]
-    _redis, deltas = await _drive_publisher(
-        flows, aggregator=agg, group_index=gi
-    )
+    _redis, deltas = await _drive_publisher(flows, aggregator=agg, group_index=gi)
     assert len(deltas) == 1
     srcs = {l["src"] for l in deltas[0]["links"]}
     assert srcs == {"alice@example.com", "bob@example.com"}
@@ -263,9 +255,7 @@ async def test_unknown_users_routed_to_unknown_strand_and_ratio_set() -> None:
             bytes_=50,
         ),
     ]
-    _redis, deltas = await _drive_publisher(
-        flows, aggregator=agg, group_index=gi
-    )
+    _redis, deltas = await _drive_publisher(flows, aggregator=agg, group_index=gi)
     assert len(deltas) == 1
     srcs = {l["src"] for l in deltas[0]["links"]}
     assert "unknown" in srcs
@@ -293,9 +283,7 @@ async def test_aggregator_none_preserves_legacy_p2_shape() -> None:
     assert len(deltas) == 1
     # Legacy mode emits ``ip:<src>`` → ``app:<label>`` links.
     links = deltas[0]["links"]
-    assert any(
-        l["src"] == "ip:10.0.0.1" and l["dst"] == "app:M365" for l in links
-    )
+    assert any(l["src"] == "ip:10.0.0.1" and l["dst"] == "app:M365" for l in links)
 
 
 @pytest.mark.asyncio
@@ -319,8 +307,6 @@ async def test_lossy_or_reduced_and_dropped_count_summed_across_window() -> None
             dropped_count=3,
         ),
     ]
-    _redis, deltas = await _drive_publisher(
-        flows, aggregator=agg, group_index=gi
-    )
+    _redis, deltas = await _drive_publisher(flows, aggregator=agg, group_index=gi)
     assert deltas[0]["lossy"] is True
     assert deltas[0]["dropped_count"] == 5

@@ -55,7 +55,7 @@ class ArubaClearpassAdapter(IdentityAdapter):
                 mac=kv.get("smac"),
                 raw_id=kv.get("externalId"),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("aruba_clearpass parse error: {}", exc)
             return None
 

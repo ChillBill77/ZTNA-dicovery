@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from prometheus_client import generate_latest
-
 from correlator.pipeline.metrics import (
     CORRELATOR_DROPPED_FLOWS,
     CORRELATOR_LCD_MISS,
@@ -12,6 +10,7 @@ from correlator.pipeline.metrics import (
     POSTGRES_INSERT_BATCH_SECONDS,
     REGISTRY,
 )
+from prometheus_client import generate_latest
 
 
 def test_queue_depth_gauge_is_exposed() -> None:

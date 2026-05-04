@@ -15,10 +15,7 @@ from api.routers.flows import _filter_links
 def _delta(*labels: tuple[str, str]) -> dict[str, Any]:
     """Build a minimal delta with links labeled by (src, dst)."""
 
-    links = [
-        {"src": src, "dst": dst, "bytes": 100, "flows": 1, "users": 1}
-        for src, dst in labels
-    ]
+    links = [{"src": src, "dst": dst, "bytes": 100, "flows": 1, "users": 1} for src, dst in labels]
     return {
         "ts": "2026-04-22T12:00:00Z",
         "window_s": 5,

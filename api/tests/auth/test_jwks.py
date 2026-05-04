@@ -3,9 +3,8 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-from freezegun import freeze_time
-
 from api.auth.jwks import JwksCache
+from freezegun import freeze_time
 
 DISCOVERY_URL = "https://login.microsoftonline.com/tid/v2.0/.well-known/openid-configuration"
 JWKS_URL = "https://login.microsoftonline.com/tid/discovery/v2.0/keys"

@@ -8,9 +8,7 @@ from typing import Any
 from loguru import logger
 
 _PII_KEYS = {"upn", "src_ip", "user_upn", "ip"}
-_trace_id: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "trace_id", default=""
-)
+_trace_id: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="")
 
 
 def set_trace_id(traceparent: str) -> None:
@@ -20,8 +18,9 @@ def set_trace_id(traceparent: str) -> None:
     Format: ``00-<trace-id>-<span-id>-<flags>``.
     """
 
+    _TRACEPARENT_MIN_PARTS = 2  # ``00-<trace-id>...``: need at least version + tid
     parts = traceparent.split("-")
-    tid = parts[1] if len(parts) >= 2 else traceparent
+    tid = parts[1] if len(parts) >= _TRACEPARENT_MIN_PARTS else traceparent
     _trace_id.set(tid)
 
 

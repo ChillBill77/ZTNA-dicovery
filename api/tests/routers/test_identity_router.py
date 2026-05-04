@@ -3,10 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi.testclient import TestClient
-
 from api.main import build_app
 from api.routers.identity import _identity_service
+from fastapi.testclient import TestClient
 
 
 class _FakeIdSvc:

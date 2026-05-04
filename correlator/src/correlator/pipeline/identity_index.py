@@ -42,10 +42,7 @@ class IdentityIndex:
     def insert(self, ev: dict[str, Any]) -> None:
         ip = ev["src_ip"]
         t = self._ts(ev)
-        if (
-            ev.get("event_type") == "nac-auth-stop"
-            or int(ev.get("ttl_seconds", 0)) == 0
-        ):
+        if ev.get("event_type") == "nac-auth-stop" or int(ev.get("ttl_seconds", 0)) == 0:
             self._invalidate(ip, ev.get("user_upn"))
             return
         end = t + timedelta(seconds=int(ev["ttl_seconds"]))

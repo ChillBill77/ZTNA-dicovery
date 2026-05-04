@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi.testclient import TestClient
-
 from api.main import build_app
 from api.routers.groups import _groups_service
+from fastapi.testclient import TestClient
 
 
 class _FakeGroupsSvc:

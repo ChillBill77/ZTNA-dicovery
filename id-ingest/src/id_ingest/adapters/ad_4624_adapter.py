@@ -14,6 +14,8 @@ from ztna_common.syslog_receiver import SyslogReceiver
 CONFIDENCE_BY_LOGON_TYPE: dict[str, int] = {"2": 90, "10": 90, "11": 50, "3": 70}
 DEFAULT_TTL_S = 8 * 3600
 ACCEPTED_LOGON_TYPES = {"2", "3", "10", "11"}
+# Windows Security event ID for "An account was successfully logged on".
+LOGON_EVENT_ID = 4624
 
 
 class Ad4624Adapter(IdentityAdapter):
@@ -35,16 +37,14 @@ class Ad4624Adapter(IdentityAdapter):
             # Winlogbeat syslog frames JSON after the first ": " (process[pid]:)
             payload = text.split(": ", 1)[1] if ": " in text else text
             doc = json.loads(payload)
-            if doc.get("event_id") != 4624:
+            if doc.get("event_id") != LOGON_EVENT_ID:
                 return None
             data = doc.get("winlog", {}).get("event_data", {})
             logon_type = str(data.get("LogonType", ""))
             ip = data.get("IpAddress")
             if logon_type not in ACCEPTED_LOGON_TYPES or not ip or ip == "-":
                 return None
-            upn = (
-                f"{data['TargetUserName']}@{data.get('TargetDomainName', '')}".rstrip("@")
-            )
+            upn = f"{data['TargetUserName']}@{data.get('TargetDomainName', '')}".rstrip("@")
             ts = datetime.fromisoformat(doc["@timestamp"].replace("Z", "+00:00"))
             return IdentityEvent(
                 ts=ts,
@@ -57,7 +57,7 @@ class Ad4624Adapter(IdentityAdapter):
                 mac=None,
                 raw_id=data.get("LogonGuid"),
             )
-        except Exception as exc:  # noqa: BLE001 — adapters MUST NOT crash the service
+        except Exception as exc:
             logger.warning("ad_4624 parse error: {}", exc)
             return None
 

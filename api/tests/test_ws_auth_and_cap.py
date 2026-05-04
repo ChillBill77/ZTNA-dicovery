@@ -8,10 +8,9 @@ assert behavior on: unauthenticated, authenticated, duplicate user.
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
-
 from api.auth.session import SessionCodec, SessionData
 from api.main import build_app
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -29,20 +28,15 @@ def _cookie_for(upn: str, roles: set[str]) -> str:
     )
 
 
-def test_anonymous_ws_is_rejected(
-    _patched: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_anonymous_ws_is_rejected(_patched: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SESSION_SECRET", "y" * 32)
     client = TestClient(build_app())
     # No session cookie → WS connect must close with 1008 (policy violation).
-    with pytest.raises(Exception):
-        with client.websocket_connect("/ws/sankey"):
-            pass
+    with pytest.raises(Exception), client.websocket_connect("/ws/sankey"):
+        pass
 
 
-def test_valid_viewer_session_is_accepted(
-    _patched: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_valid_viewer_session_is_accepted(_patched: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SESSION_SECRET", "y" * 32)
     client = TestClient(build_app())
     client.cookies.set("session", _cookie_for("alice@example.com", {"viewer"}))
@@ -57,20 +51,17 @@ def test_duplicate_connection_for_same_user_rejected(
     monkeypatch.setenv("SESSION_SECRET", "y" * 32)
     client = TestClient(build_app())
     client.cookies.set("session", _cookie_for("bob@example.com", {"viewer"}))
-    with client.websocket_connect("/ws/sankey"):
-        # Opening a second concurrent WS for the same user must be rejected.
-        with pytest.raises(Exception):
-            with client.websocket_connect("/ws/sankey"):
-                pass
+    # Outer connection must stay open while we attempt the duplicate, hence the
+    # nested `with` (SIM117 cannot be combined without changing semantics).
+    with client.websocket_connect("/ws/sankey"):  # noqa: SIM117
+        with pytest.raises(Exception), client.websocket_connect("/ws/sankey"):
+            pass
 
 
-def test_missing_viewer_role_rejected(
-    _patched: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_missing_viewer_role_rejected(_patched: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SESSION_SECRET", "y" * 32)
     client = TestClient(build_app())
     # Roles set lacks "viewer" — should be rejected.
     client.cookies.set("session", _cookie_for("eve@example.com", set()))
-    with pytest.raises(Exception):
-        with client.websocket_connect("/ws/sankey"):
-            pass
+    with pytest.raises(Exception), client.websocket_connect("/ws/sankey"):
+        pass

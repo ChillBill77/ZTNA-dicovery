@@ -97,10 +97,8 @@ class GroupAggregator:
                         floor=self._floor,
                     )
                 chosen = self._cache[key]
-                if chosen is None:
-                    label_for = {u: u for u in known}  # per-user fallback
-                else:
-                    label_for = {u: chosen for u in known}
+                # chosen=None → per-user fallback; otherwise rollup to chosen group.
+                label_for = {u: u for u in known} if chosen is None else {u: chosen for u in known}
 
             for r in per_dst_rows[dst]:
                 if r["user_upn"] == "unknown":

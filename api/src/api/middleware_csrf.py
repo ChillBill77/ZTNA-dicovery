@@ -30,7 +30,5 @@ class CsrfMiddleware(BaseHTTPMiddleware):
         cookie_token = request.cookies.get("csrf_token")
         header_token = request.headers.get("x-csrf-token")
         if not cookie_token or cookie_token != header_token:
-            return JSONResponse(
-                status_code=403, content={"detail": "CSRF token mismatch"}
-            )
+            return JSONResponse(status_code=403, content={"detail": "CSRF token mismatch"})
         return await call_next(request)

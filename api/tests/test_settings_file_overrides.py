@@ -12,13 +12,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from api.settings import Settings
 
 
-def test_session_secret_file_overrides_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_session_secret_file_overrides_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)  # avoid picking up repo .env
     secret_file = tmp_path / "session.secret"
     secret_file.write_text("f" * 32 + "\n")
@@ -47,18 +44,14 @@ def test_file_override_missing_path_is_silent(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SESSION_SECRET", "from-env-used")
-    monkeypatch.setenv(
-        "SESSION_SECRET_FILE", str(tmp_path / "nonexistent")
-    )
+    monkeypatch.setenv("SESSION_SECRET_FILE", str(tmp_path / "nonexistent"))
 
     s = Settings()
     # Path doesn't exist → env var wins, no exception.
     assert s.session_secret == "from-env-used"
 
 
-def test_no_env_no_file_uses_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_no_env_no_file_uses_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     for name in (
         "SESSION_SECRET",

@@ -75,13 +75,10 @@ class EntraSigninAdapter(IdentityAdapter):
     async def poll_once(self) -> AsyncIterator[IdentityEvent]:
         token = await self._token()
         url: str | None = (
-            self._delta_link
-            or f"{GRAPH_BASE}/auditLogs/signIns?$filter=status/errorCode eq 0"
+            self._delta_link or f"{GRAPH_BASE}/auditLogs/signIns?$filter=status/errorCode eq 0"
         )
         while url:
-            r = await self._client.get(
-                url, headers={"Authorization": f"Bearer {token}"}
-            )
+            r = await self._client.get(url, headers={"Authorization": f"Bearer {token}"})
             r.raise_for_status()
             body = r.json()
             for item in body.get("value", []):
@@ -91,9 +88,7 @@ class EntraSigninAdapter(IdentityAdapter):
                 upn = item.get("userPrincipalName")
                 if not ip or not upn:
                     continue
-                ts = datetime.fromisoformat(
-                    item["createdDateTime"].replace("Z", "+00:00")
-                )
+                ts = datetime.fromisoformat(item["createdDateTime"].replace("Z", "+00:00"))
                 yield IdentityEvent(
                     ts=ts,
                     src_ip=ip,
@@ -114,7 +109,7 @@ class EntraSigninAdapter(IdentityAdapter):
             try:
                 async for ev in self.poll_once():
                     yield ev
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("entra_signin poll error: {}", exc)
             await asyncio.sleep(self._poll)
 

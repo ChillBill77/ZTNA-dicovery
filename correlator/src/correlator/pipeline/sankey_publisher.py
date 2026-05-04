@@ -78,9 +78,7 @@ class SankeyPublisher:
         except Exception as exc:
             logger.warning("sankey publish failed: {}", exc)
 
-    def _build_legacy_delta(
-        self, bucket: datetime, flows: list[LabelledFlow]
-    ) -> dict[str, Any]:
+    def _build_legacy_delta(self, bucket: datetime, flows: list[LabelledFlow]) -> dict[str, Any]:
         links: dict[tuple[str, str], dict[str, Any]] = {}
         nodes_left: dict[str, dict[str, Any]] = {}
         nodes_right: dict[str, dict[str, Any]] = {}
@@ -124,9 +122,7 @@ class SankeyPublisher:
             "dropped_count": dropped,
         }
 
-    def _build_group_delta(
-        self, bucket: datetime, flows: list[LabelledFlow]
-    ) -> dict[str, Any]:
+    def _build_group_delta(self, bucket: datetime, flows: list[LabelledFlow]) -> dict[str, Any]:
         # ``aggregator``/``group_index`` are guaranteed non-None when group-mode
         # is active (see ``_publish``). Bind locally to please mypy without an
         # extra runtime branch.
@@ -195,9 +191,7 @@ class SankeyPublisher:
             "dropped_count": dropped,
         }
 
-    def _build_left_nodes(
-        self, links: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _build_left_nodes(self, links: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen: dict[str, dict[str, Any]] = {}
         for link in links:
             src = link["src"]

@@ -6,7 +6,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-
 from id_ingest.adapters.entra_signin_adapter import EntraSigninAdapter
 
 FIX = Path(__file__).parent.parent / "fixtures" / "entra"

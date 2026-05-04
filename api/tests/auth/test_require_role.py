@@ -24,9 +24,7 @@ from fastapi.testclient import TestClient
         ("GET", "/api/groups/g:sales"),
     ],
 )
-def test_every_crud_route_is_role_guarded(
-    anon_client: TestClient, method: str, path: str
-) -> None:
+def test_every_crud_route_is_role_guarded(anon_client: TestClient, method: str, path: str) -> None:
     r = anon_client.request(method, path)
     assert r.status_code in (401, 403, 422), (
         f"{method} {path} returned {r.status_code}; expected auth-gate"

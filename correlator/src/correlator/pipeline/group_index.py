@@ -8,9 +8,7 @@ from typing import Any, Protocol
 class _AsyncConn(Protocol):
     async def fetch(self, sql: str) -> Any: ...
 
-    async def add_listener(
-        self, channel: str, cb: Callable[..., Awaitable[None]]
-    ) -> Any: ...
+    async def add_listener(self, channel: str, cb: Callable[..., Awaitable[None]]) -> Any: ...
 
 
 class GroupIndex:
@@ -26,9 +24,7 @@ class GroupIndex:
         self._group_name: dict[str, str] = {}
 
     async def load(self) -> None:
-        rows = await self._conn.fetch(
-            "SELECT user_upn, group_id, group_name FROM user_groups"
-        )
+        rows = await self._conn.fetch("SELECT user_upn, group_id, group_name FROM user_groups")
         ug: dict[str, set[str]] = defaultdict(set)
         names: dict[str, str] = {}
         for r in rows:

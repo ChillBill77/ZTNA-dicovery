@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from id_ingest.group_sync.ad_sync import GroupUpsert
 from id_ingest.group_sync.worker import GroupSyncWorker
 

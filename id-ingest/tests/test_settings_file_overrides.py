@@ -12,7 +12,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from id_ingest.settings import IdIngestSettings
 
 
@@ -47,9 +46,7 @@ def test_file_override_missing_path_is_silent(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AD_BIND_PASSWORD", "from-env-used")
-    monkeypatch.setenv(
-        "AD_BIND_PASSWORD_FILE", str(tmp_path / "nonexistent")
-    )
+    monkeypatch.setenv("AD_BIND_PASSWORD_FILE", str(tmp_path / "nonexistent"))
 
     s = IdIngestSettings()
     # Path doesn't exist → env var wins, no exception.
