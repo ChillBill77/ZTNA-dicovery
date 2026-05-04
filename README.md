@@ -1,5 +1,7 @@
 # ZTNA Flow Discovery
 
+![ZTNA Flow Discovery — live 5-column Sankey](docs/screenshots/sankey-overview.png)
+
 Self-hosted near-realtime Sankey visualization of network flows, enriched with user and group identity from Entra ID / AD / Cisco ISE / Aruba ClearPass.
 
 See the design spec: [`docs/superpowers/specs/2026-04-22-ztna-flow-discovery-design.md`](docs/superpowers/specs/2026-04-22-ztna-flow-discovery-design.md).
