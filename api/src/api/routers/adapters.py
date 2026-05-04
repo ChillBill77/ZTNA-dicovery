@@ -39,7 +39,8 @@ async def _group_sync_age(session: AsyncSession) -> float | None:
     )
     if not row or row["latest"] is None:
         return None
-    delta = datetime.now(UTC) - row["latest"]
+    latest: datetime = row["latest"]
+    delta = datetime.now(UTC) - latest
     return max(0.0, delta.total_seconds())
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from loguru import logger
 from ztna_common.adapter_base import IdentityAdapter
@@ -27,7 +27,7 @@ class ArubaClearpassAdapter(IdentityAdapter):
     def from_config(cls, cfg: dict[str, object]) -> ArubaClearpassAdapter:
         return cls(
             host=str(cfg.get("host", cfg.get("bind", "0.0.0.0"))),
-            port=int(cfg.get("port", 518)),  # type: ignore[arg-type]
+            port=int(cast("int | str", cfg.get("port", 518))),
         )
 
     def parse(self, line: bytes) -> IdentityEvent | None:

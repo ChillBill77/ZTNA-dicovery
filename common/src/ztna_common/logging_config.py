@@ -3,9 +3,10 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import sys
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
-from loguru import logger
+from loguru import Record, logger
 
 _PII_KEYS = {"upn", "src_ip", "user_upn", "ip"}
 _trace_id: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="")
@@ -52,6 +53,8 @@ def configure(level: str = "INFO") -> None:
     """
 
     logger.remove()
+    # _processor takes a structurally-compatible record dict; loguru's stricter
+    # type stub expects Callable[[Record], bool]. Cast keeps both happy.
     logger.add(
         sys.stdout,
         level=level.upper(),
@@ -59,7 +62,7 @@ def configure(level: str = "INFO") -> None:
         backtrace=False,
         diagnose=False,
         enqueue=False,
-        filter=_processor,
+        filter=cast("Callable[[Record], bool]", _processor),
     )
 
 

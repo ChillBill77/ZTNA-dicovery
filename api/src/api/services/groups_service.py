@@ -53,7 +53,9 @@ class GroupsService:
             .mappings()
             .first()
         )
-        size = int(size_row["n"]) if size_row else 0
+        if size_row is None:
+            return None
+        size = int(size_row["n"])
         if size == 0:
             return None
         group_name = size_row["group_name"] or group_id

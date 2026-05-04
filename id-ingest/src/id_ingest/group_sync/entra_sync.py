@@ -15,7 +15,7 @@ class EntraGroupSync:
     tenant_id: str
     client_id: str
     client_secret: str
-    transport: httpx.BaseTransport | None = None
+    transport: httpx.AsyncBaseTransport | None = None
 
     async def _token(self, c: httpx.AsyncClient) -> str:
         r = await c.post(
