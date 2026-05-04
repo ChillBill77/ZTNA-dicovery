@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from api.auth.jwt_verify import InvalidToken, verify_jwt
 
-from api.tests.auth.fixtures.mock_token import new_keypair, sign, standard_claims
+from tests.auth.fixtures.mock_token import new_keypair, sign, standard_claims
 
 
 class _FakeJwks:
