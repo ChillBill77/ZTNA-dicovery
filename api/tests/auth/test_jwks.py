@@ -56,8 +56,9 @@ async def test_cache_refreshes_after_ttl(discovery_mock: respx.Router) -> None:
 async def test_cache_refreshes_on_kid_miss(discovery_mock: respx.Router) -> None:
     cache = JwksCache(DISCOVERY_URL)
     await cache.get_key("kid-1")
-    # Simulate rotated kid-2 in upstream JWKS.
-    discovery_mock.get(JWKS_URL).mock(
+    # Simulate rotated kid-2 in upstream JWKS. Re-using the same name keeps
+    # `discovery_mock["jwks"].call_count` cumulative across both responses.
+    discovery_mock.get(JWKS_URL, name="jwks").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -70,7 +71,9 @@ async def test_cache_refreshes_on_kid_miss(discovery_mock: respx.Router) -> None
     )
     key = await cache.get_key("kid-2")
     assert key["kid"] == "kid-2"
-    assert discovery_mock["jwks"].call_count == 2
+    # Total fetches across both mocked responses should be 2 (initial + refresh).
+    jwks_hits = sum(1 for call in discovery_mock.calls if str(call.request.url) == JWKS_URL)
+    assert jwks_hits == 2
 
 
 @pytest.mark.asyncio

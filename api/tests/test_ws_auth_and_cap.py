@@ -38,24 +38,28 @@ def test_anonymous_ws_is_rejected(_patched: None, monkeypatch: pytest.MonkeyPatc
 
 def test_valid_viewer_session_is_accepted(_patched: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SESSION_SECRET", "y" * 32)
-    client = TestClient(build_app())
-    client.cookies.set("session", _cookie_for("alice@example.com", {"viewer"}))
-    with client.websocket_connect("/ws/sankey") as ws:
-        # Handshake succeeded — send a filter update and then close.
-        ws.send_text('{"filter": {"dst_app": "m365"}}')
+    # `with TestClient(...) as client` runs the FastAPI lifespan, which
+    # initializes the `_fanout` singleton in api.routers.ws — without it,
+    # the handler short-circuits with a 1011 close on every connect.
+    with TestClient(build_app()) as client:
+        client.cookies.set("session", _cookie_for("alice@example.com", {"viewer"}))
+        with client.websocket_connect("/ws/sankey") as ws:
+            # Handshake succeeded — send a filter update and then close.
+            ws.send_text('{"filter": {"dst_app": "m365"}}')
 
 
 def test_duplicate_connection_for_same_user_rejected(
     _patched: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SESSION_SECRET", "y" * 32)
-    client = TestClient(build_app())
-    client.cookies.set("session", _cookie_for("bob@example.com", {"viewer"}))
-    # Outer connection must stay open while we attempt the duplicate, hence the
-    # nested `with` (SIM117 cannot be combined without changing semantics).
-    with client.websocket_connect("/ws/sankey"):  # noqa: SIM117
-        with pytest.raises(Exception), client.websocket_connect("/ws/sankey"):
-            pass
+    with TestClient(build_app()) as client:
+        client.cookies.set("session", _cookie_for("bob@example.com", {"viewer"}))
+        # Outer connection must stay open while we attempt the duplicate, hence
+        # the nested `with` (SIM117 cannot be combined without changing
+        # semantics).
+        with client.websocket_connect("/ws/sankey"):  # noqa: SIM117
+            with pytest.raises(Exception), client.websocket_connect("/ws/sankey"):
+                pass
 
 
 def test_missing_viewer_role_rejected(_patched: None, monkeypatch: pytest.MonkeyPatch) -> None:
